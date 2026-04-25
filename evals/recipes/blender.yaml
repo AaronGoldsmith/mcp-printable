@@ -1,0 +1,38 @@
+version: "1.0.0"
+title: "Printable — Blender MCP eval"
+description: "Drive an LLM through the printable Blender MCP for a single scenario, capture the trace."
+
+parameters:
+  - key: scenario_prompt
+    input_type: string
+    requirement: required
+    description: "The user prompt for this scenario (verbatim from scenarios/<id>.md)."
+  - key: provider
+    input_type: string
+    requirement: required
+    description: "Goose provider id (anthropic, gemini_oauth, openrouter, ...)."
+  - key: model
+    input_type: string
+    requirement: required
+    description: "Model id understood by the provider."
+  - key: printable_server_path
+    input_type: string
+    requirement: required
+    description: "Absolute path to the printable MCP server.py."
+
+prompt: |
+  {{ scenario_prompt }}
+
+extensions:
+  - type: builtin
+    name: developer
+  - type: stdio
+    name: printable
+    cmd: python
+    args:
+      - "{{ printable_server_path }}"
+    timeout: 120
+
+settings:
+  provider: "{{ provider }}"
+  model: "{{ model }}"

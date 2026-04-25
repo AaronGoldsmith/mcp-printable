@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Generated texture pipeline outputs
+texture_maps/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Blender checkpoints
+*.blend1
+printable_blender_checkpoint.blend
+printable_blender_scene.blend
+
+# Eval runtime
+evals/results/latest.json
