@@ -42,7 +42,8 @@ mcp = FastMCP(
         "Building at the default 1m scale produces zero-volume meshes that pass watertight checks "
         "but are useless. If the user is iterating on an existing scene (\"tweak this hinge\", \"add "
         "a fillet\"), do NOT clear — call `blender_get_scene_info` first to confirm `units.is_mm` "
-        "and orient yourself. Use clear_scene only on fresh builds.\n"
+        "and orient yourself. `clear_scene` refuses to wipe a non-empty scene by default — pass "
+        "`force=True` only when you genuinely want a fresh build over existing geometry.\n"
         "- Use `blender_boolean` for boolean operations. NEVER use `bpy.ops.object.join()` "
         "(creates internal faces) or raw bpy boolean modifiers in execute_code (failures "
         "are silent).\n"
@@ -339,8 +340,27 @@ async def blender_get_object_info(name: str) -> str:
     annotations={"readOnlyHint": False, "destructiveHint": True,
                  "idempotentHint": True, "openWorldHint": False},
 )
-async def blender_clear_scene() -> str:
-    """Remove all objects from the scene. This is destructive and cannot be undone."""
+async def blender_clear_scene(force: bool = False) -> str:
+    """Remove all objects from the scene. Refuses to wipe a non-empty scene unless force=True.
+
+    Default behavior protects in-progress user work — if the scene already has
+    objects, this tool returns an error listing them and asks the agent to
+    confirm intent. Pass `force=True` to override (for genuine fresh-build
+    scenarios). Always sets units to mm regardless.
+    """
+    if not force:
+        info = blender.send("get_scene_info")
+        objs = info.get("objects") or []
+        if objs:
+            names = [o.get("name", "?") for o in objs[:10]]
+            more = "" if len(objs) <= 10 else f" (+{len(objs) - 10} more)"
+            raise ValueError(
+                f"Scene already has {len(objs)} object(s): {', '.join(names)}{more}. "
+                f"Refusing to clear — this would destroy in-progress work. "
+                f"Pass force=True if you really mean to wipe the scene, or use "
+                f"blender_get_scene_info / blender_get_object_info to inspect "
+                f"existing geometry and iterate on it instead."
+            )
     blender.send("clear_scene")
     return "Scene cleared."
 
@@ -891,7 +911,17 @@ async def blender_export_stl(
     object_name: export only one object.
     object_names: export specific objects bundled into one STL (e.g., ["leaf_A", "leaf_B", "pin"]).
     Warns about non-manifold edges.
+
+    Relative paths are resolved against the MCP server's working directory (where
+    you launched your agent) — NOT Blender's. Blender's cwd is typically its
+    install dir, which is read-only on Windows; resolving here avoids silent
+    "cannot open file" errors against `C:\\Program Files\\...`.
     """
+    # Resolve here so the addon receives an absolute path under a writable dir.
+    # os.path.abspath uses the MCP process's cwd, which is the user's project
+    # dir when launched via uvx/claude — exactly what the agent intends.
+    path = os.path.abspath(path)
+
     params = {"path": path, "binary": binary}
     if object_names:
         params["object_names"] = object_names
@@ -913,7 +943,11 @@ async def blender_export_stl(
                  "idempotentHint": False, "openWorldHint": False},
 )
 async def blender_import_stl(path: str) -> str:
-    """Import an STL file into the scene."""
+    """Import an STL file into the scene.
+
+    Relative paths are resolved against the MCP server's working directory.
+    """
+    path = os.path.abspath(path)
     result = blender.send("import_stl", {"path": path})
     return (
         f"Imported '{result['object_name']}' from {result['path']}: "
@@ -930,10 +964,11 @@ async def blender_save_blend(path: str | None = None) -> str:
     """Save the current scene as a .blend file.
 
     If path is omitted, saves to the current file or a temp location.
+    Relative paths are resolved against the MCP server's working directory.
     """
     params = {}
     if path:
-        params["path"] = path
+        params["path"] = os.path.abspath(path)
     result = blender.send("save_blend", params)
     return f"Saved: {result['path']}"
 

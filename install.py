@@ -66,6 +66,16 @@ def install(target_path=None):
     addon_dir = os.path.join(paths[0], ADDON_DIR_NAME)
     os.makedirs(paths[0], exist_ok=True)
 
+    # Self-heal: clean up stray files left behind if someone previously used
+    # Blender's "Install from Disk" on install.py itself (a known footgun
+    # documented in SETUP.md). Those files have no bl_info, won't register,
+    # and cause "Warning: add-on missing 'bl_info'" spam in the Blender console.
+    for stray in ("install.py", "addon.py"):
+        stray_path = os.path.join(paths[0], stray)
+        if os.path.isfile(stray_path):
+            os.remove(stray_path)
+            print(f"Cleaned up stray file from prior bad install: {stray_path}")
+
     if os.path.exists(addon_dir):
         print(f"Removing existing addon at: {addon_dir}")
         shutil.rmtree(addon_dir)
