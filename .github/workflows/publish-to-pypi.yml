@@ -26,8 +26,13 @@ jobs:
           path: dist/
 
   publish-testpypi:
-    name: Publish to TestPyPI on main pushes
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Manual dry-run only. Trigger from the Actions tab when you want to verify
+    # a build will publish cleanly before tagging a real release. Auto-publish
+    # on every main push was removed because uv publish errors on identical
+    # version + different content (typical for README-only commits), and
+    # bumping the version per commit defeats the purpose of versioning.
+    name: Publish to TestPyPI (manual)
+    if: github.event_name == 'workflow_dispatch'
     needs: [build]
     runs-on: ubuntu-latest
     permissions:
@@ -43,15 +48,7 @@ jobs:
           path: dist/
       - uses: astral-sh/setup-uv@v6
       - name: Publish to TestPyPI (OIDC)
-        # --check-url skips uploads of files already on TestPyPI so commits to
-        # main don't fail just because the version hasn't been bumped yet. The
-        # production publish on tag push intentionally does NOT skip — re-pushing
-        # a tag should fail loudly, since it usually means a mistake.
-        run: |
-          uv publish \
-            --publish-url https://test.pypi.org/legacy/ \
-            --check-url https://test.pypi.org/simple/ \
-            dist/*
+        run: uv publish --publish-url https://test.pypi.org/legacy/ dist/*
 
   publish-pypi:
     name: Publish to PyPI on tags
