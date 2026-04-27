@@ -175,7 +175,4 @@ Before finalizing any print-in-place design:
 
 ## Worked recipes
 
-Validated parameter sets from real prints:
-
-- [recipes/wheel-on-axle.md](print-in-place/recipes/wheel-on-axle.md) — toy car wheel on a body-spanning axle with retention caps
-- [recipes/flip-tile.md](print-in-place/recipes/flip-tile.md) — tic-tac-toe flip tiles in closed bores (no pins, no sockets)
+Validated parameter sets for common mechanisms (wheel-on-axle, flip-tile, ball-and-socket, snap fit) are planned for a future release — see the Roadmap in the project README. Until they land, derive parameters from the clearance + retention rules above and verify with `blender_check_clearance_sweep` + `blender_check_retention` before exporting.

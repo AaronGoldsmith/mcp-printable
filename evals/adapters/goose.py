@@ -1,19 +1,21 @@
 """Goose adapter — runs a scenario via a Goose recipe and captures the trace.
 
-Goose has built-in machinery for everything we'd otherwise plumb by hand:
-extension wiring, model selection, parameter substitution. We use it.
+Approach:
+  1. `goose run --recipe ... -n <session_name>` — Goose persists the full
+     structured conversation to its sessions store.
+  2. After the subprocess exits, `goose session export -n <name> --format json`
+     emits the full session payload (top-level metadata + a `conversation`
+     array of MessageContent blocks). We parse that and build a Trace.
 
-  evals/recipes/blender.yaml — declares MCPs, builtins, model. Parameterized
-  on `scenario_prompt`, `provider`, `model`, `printable_server_path`.
-
-This adapter just:
-  1. Renders the recipe params for a given scenario.
-  2. Invokes `goose run --recipe ... --output-format stream-json`.
-  3. Parses the JSONL event stream into a Trace.
+We use the export CLI rather than reading Goose's internal SQLite directly so
+the adapter rides the documented public boundary and survives schema changes.
+This also avoids parsing the streaming-JSONL stdout, which fragments text into
+many partial chunks.
 
 References (verified 2026-04):
-  https://block.github.io/goose/docs/  (recipe schema, --params, --output-format)
-  Repo: https://github.com/aaif-goose/goose
+  Recipe / CLI flags:    https://block.github.io/goose/docs/
+  `session export` CLI:  goose session export --help
+  MessageContent enum:   crates/goose/src/conversation/message.rs
 """
 
 from __future__ import annotations
@@ -22,14 +24,13 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..framework import EVALS_ROOT, REPO_ROOT, Scenario, ToolCall, Trace
 
-DEFAULT_RECIPE = EVALS_ROOT / "recipes" / "blender.yaml"
+DEFAULT_RECIPE = EVALS_ROOT / "goose-recipes" / "blender.yaml"
 
 
 @dataclass
@@ -40,6 +41,8 @@ class GooseRun:
     max_turns: int = 80
     max_tool_repetitions: int = 5
     timeout_s: int = 600
+    debug: bool = False
+    extension_name: str = "printable"  # must match `name:` in the recipe
 
     @property
     def label(self) -> str:
@@ -73,15 +76,18 @@ def run(scenario: Scenario, cfg: GooseRun | None = None,
         f"printable_server_path={server_path}",
     ]
 
+    session_name = f"eval_{scenario.id}_{cfg.model.replace('/', '_')}"
     cmd = [
         "goose", "run",
         "--recipe", str(cfg.recipe),
+        "-n", session_name,
         "--max-turns", str(scenario.budget.get("max_tool_calls", cfg.max_turns)),
         "--max-tool-repetitions", str(cfg.max_tool_repetitions),
-        "--output-format", "stream-json",
-        "--no-session",
-        "-q",
     ]
+    if cfg.debug:
+        cmd.append("--debug")
+    else:
+        cmd.append("-q")
     for p in params:
         cmd += ["--params", p]
 
@@ -94,69 +100,80 @@ def run(scenario: Scenario, cfg: GooseRun | None = None,
 
     proc = subprocess.run(
         cmd, env=env, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
         timeout=timeout, cwd=str(REPO_ROOT),
     )
 
     if log_dir:
         log_dir.mkdir(parents=True, exist_ok=True)
         tag = f"{scenario.id}_{cfg.model.replace('/', '_')}"
-        (log_dir / f"{tag}.stdout.jsonl").write_text(proc.stdout, encoding="utf-8")
         if proc.stderr:
             (log_dir / f"{tag}.stderr.txt").write_text(proc.stderr, encoding="utf-8")
 
-    events = _parse_jsonl(proc.stdout)
-    calls = _events_to_calls(events)
-    transcript = _extract_transcript(events)
+    return load_trace_from_session(session_name, scenario.id,
+                                   extension_prefix=cfg.extension_name)
+
+
+def load_trace_from_session(session_name: str, scenario_id: str,
+                            extension_prefix: str = "printable") -> Trace:
+    """Export the named Goose session and build a Trace from it.
+
+    Calls `goose session export -n <session_name> --format json` and parses
+    the resulting payload — the documented public surface for getting a
+    structured copy of a session's conversation.
+
+    The export schema (top-level keys we use): `provider_name`, `model_config`,
+    `conversation`. Each conversation entry has `role` and `content` (a list
+    of MessageContent blocks: toolRequest, toolResponse, text, ...).
+    """
+    proc = subprocess.run(
+        ["goose", "session", "export", "-n", session_name, "--format", "json"],
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise RuntimeError(
+            f"`goose session export -n {session_name}` failed "
+            f"(rc={proc.returncode}): {proc.stderr.strip() or '<no stderr>'}"
+        )
+
+    data = json.loads(proc.stdout)
+    conversation = data.get("conversation") or []
+    messages = [(m.get("role"), m.get("content") or []) for m in conversation]
+
+    calls = _messages_to_calls(messages, extension_prefix=extension_prefix)
+    transcript = _messages_to_transcript(messages)
+
+    provider_name = data.get("provider_name") or ""
+    model_cfg = data.get("model_config") or {}
+    model = model_cfg.get("model_name") or model_cfg.get("model") or ""
 
     return Trace(
-        scenario_id=scenario.id,
-        agent=f"goose:{cfg.provider}/{cfg.model}",
+        scenario_id=scenario_id,
+        agent=f"goose:{provider_name}/{model}",
         calls=calls,
         transcript=transcript,
     )
 
 
-def _parse_jsonl(blob: str) -> list[dict]:
-    out: list[dict] = []
-    for line in blob.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+def _messages_to_calls(messages: list[tuple[str, list]],
+                       extension_prefix: str = "") -> list[ToolCall]:
+    """Walk (role, content_blocks) pairs from a session export; extract ToolCalls.
 
-
-def _events_to_calls(events: list[dict]) -> list[ToolCall]:
-    """Parse Goose stream-json events into ToolCall records.
-
-    The schema is model-agnostic — Goose normalizes provider responses (Anthropic
-    tool_use, OpenAI tool_calls, Gemini function_call) into its internal Message
-    type before serializing. Verified against:
-      crates/goose-cli/src/session/mod.rs       (StreamEvent, tag="type")
-      crates/goose/src/conversation/message.rs  (MessageContent, tag="type", camelCase)
-
-    Top-level event shape:
-        {"type": "message", "message": {"role": "...", "content": [...blocks...]}}
-        {"type": "notification" | "error" | "complete", ...}
-
-    Block shapes we care about (camelCase tags from MessageContent variants):
+    Goose's MessageContent enum (camelCase variants from
+    crates/goose/src/conversation/message.rs):
         {"type": "toolRequest",  "id": str,
          "toolCall":   {"status": "success", "value": {"name": str, "arguments": {...}}}}
         {"type": "toolResponse", "id": str,
          "toolResult": {"status": "success", "value": {"content": [...]}}}
-        Either toolCall.status or toolResult.status may be "error" with an "error" field.
     """
     calls: list[ToolCall] = []
     by_id: dict[str, int] = {}
+    prefix = f"{extension_prefix}__" if extension_prefix else ""
 
-    for ev in events:
-        if ev.get("type") != "message":
-            continue
-        msg = ev.get("message") or {}
-        for blk in msg.get("content") or []:
+    for _role, blocks in messages:
+        for blk in blocks or []:
             if not isinstance(blk, dict):
                 continue
             t = blk.get("type")
@@ -164,21 +181,23 @@ def _events_to_calls(events: list[dict]) -> list[ToolCall]:
             if t == "toolRequest":
                 tid = blk.get("id") or f"_anon_{len(calls)}"
                 tc = blk.get("toolCall") or {}
-                if tc.get("status") == "success":
-                    val = tc.get("value") or {}
-                    name = val.get("name", "<unknown>")
-                    args = val.get("arguments") or {}
-                    idx = len(calls)
-                    calls.append(ToolCall(call_index=idx, tool=name, args=args))
-                    by_id[tid] = idx
-                else:
-                    # The model produced an unparseable tool call — record it as an error.
+                if tc.get("status") != "success":
                     idx = len(calls)
                     calls.append(ToolCall(
                         call_index=idx, tool="<malformed>", args={},
                         error=tc.get("error") or "malformed tool call",
                     ))
                     by_id[tid] = idx
+                    continue
+                val = tc.get("value") or {}
+                name = val.get("name", "<unknown>")
+                if prefix and name.startswith(prefix):
+                    name = name[len(prefix):]
+                idx = len(calls)
+                calls.append(ToolCall(
+                    call_index=idx, tool=name, args=val.get("arguments") or {},
+                ))
+                by_id[tid] = idx
 
             elif t == "toolResponse":
                 tid = blk.get("id")
@@ -187,8 +206,7 @@ def _events_to_calls(events: list[dict]) -> list[ToolCall]:
                 idx = by_id[tid]
                 tr = blk.get("toolResult") or {}
                 if tr.get("status") == "success":
-                    val = tr.get("value") or {}
-                    calls[idx].result = _flatten_call_tool_result(val)
+                    calls[idx].result = _flatten_call_tool_result(tr.get("value") or {})
                 else:
                     calls[idx].error = tr.get("error") or "tool error"
 
@@ -218,15 +236,29 @@ def _flatten_call_tool_result(value: dict) -> dict[str, Any]:
     return {"content": parts}
 
 
-def _extract_transcript(events: list[dict]) -> str:
+def _messages_to_transcript(messages: list[tuple[str, list]]) -> str:
+    """Join assistant text + reasoning blocks into a single transcript.
+
+    Reasoning is included so LLM judges can see *why* the agent chose a tool
+    sequence, not just the final summary. It's prefixed with `[reasoning]` so
+    consumers can strip it with a regex if they only want user-visible text.
+
+    Tool-only assistant turns (toolRequest with no text/reasoning) emit nothing.
+    """
     chunks: list[str] = []
-    for ev in events:
-        if ev.get("type") != "message":
+    for role, blocks in messages:
+        if role != "assistant":
             continue
-        msg = ev.get("message") or {}
-        if msg.get("role") != "assistant":
-            continue
-        for blk in msg.get("content") or []:
-            if isinstance(blk, dict) and blk.get("type") == "text":
-                chunks.append(blk.get("text", ""))
-    return "\n\n".join(c for c in chunks if c)
+        for blk in blocks or []:
+            if not isinstance(blk, dict):
+                continue
+            t = blk.get("type")
+            if t == "text":
+                txt = blk.get("text", "").strip()
+                if txt:
+                    chunks.append(txt)
+            elif t == "reasoning":
+                txt = blk.get("text", "").strip()
+                if txt:
+                    chunks.append(f"[reasoning] {txt}")
+    return "\n\n".join(chunks)

@@ -24,8 +24,13 @@ prompt: |
   {{ scenario_prompt }}
 
 extensions:
+  # `developer` (shell/write/edit/tree/analyze) is intentionally NOT included.
+  # We're evaluating how the agent uses the printable MCP — if shell access is
+  # available, some models will write a Python script + run it via shell instead
+  # of going through the typed MCP tools (observed with qwen3.6-plus). Keeping
+  # the surface MCP-only forces the eval to actually exercise printable.
   - type: builtin
-    name: developer
+    name: summon
   - type: stdio
     name: printable
     cmd: python
@@ -34,5 +39,5 @@ extensions:
     timeout: 120
 
 settings:
-  provider: "{{ provider }}"
-  model: "{{ model }}"
+  goose_provider: "{{ provider }}"
+  goose_model: "{{ model }}"

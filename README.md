@@ -27,33 +27,69 @@ Agent  <--stdio/MCP-->  server.py  <--TCP :9876-->  Blender addon
 
 - `server.py` — FastMCP server. Exposes the tool surface and embeds the always-on rules in the MCP `instructions` field, with pointers into `docs/` for deeper guidance.
 - `addon/` — Blender addon. TCP server on `127.0.0.1:9876`. Commands run on Blender's main thread via `bpy.app.timers`.
-- `docs/` — agent-agnostic prose guidance: print-in-place rules, design loop, validated recipes. Also exposed as **MCP resources** under `printable://…` URIs (see [Documents](#documents) below) so any resource-aware MCP client can pull them via the protocol — no filesystem access required.
+- `docs/` — agent-agnostic prose guidance: print-in-place rules, design loop, image displacement. Also exposed as **MCP resources** under `printable://…` URIs (see [Documents](#documents) below) so any resource-aware MCP client can pull them via the protocol — no filesystem access required.
 - `.claude/skills/` — thin Claude shims (description-triggered loading) that point into `docs/`. Other agents use resources or filesystem.
 - `evals/` — policy-based regression tests that verify agents actually follow the rules. See [`evals/README.md`](evals/README.md).
 
+## Status
+
+v0.1.0 — alpha. Blender backend is feature-complete and dogfooded against real prints; OpenSCAD backend covers the parametric workflow but has fewer validation tools. API is stable enough to use but may shift before 1.0.
+
 ## Setup
 
+### Install from PyPI
+
 ```bash
-uv sync                        # MCP server + deps (or: pip install .)
-python install.py              # Copies the addon into Blender's addon dir
+pip install mcp-printable       # or: uv pip install mcp-printable
+printable-install-addon         # copies the bundled addon into Blender's addon dir
 ```
 
 Then in Blender: Preferences → Add-ons → enable **"Printable Blender Bridge"**.
 
-Add to your agent's MCP config. For Claude Code:
+### Install from source
+
+```bash
+git clone https://github.com/AaronGoldsmith/mcp-printable
+cd mcp-printable
+uv sync                         # or: pip install .
+python install.py               # equivalent to printable-install-addon
+```
+
+> [!IMPORTANT]
+> Run the install step from a terminal — **NOT** Blender's "Install from Disk" dialog. See [`SETUP.md`](SETUP.md) for why and other gotchas.
+
+### Wire into your agent
+
+For Claude Code (`~/.claude.json` or project `.mcp.json`):
 
 ```json
 {
   "printable-blender": {
-    "command": "python",
-    "args": ["/path/to/printable/server.py"]
+    "command": "printable"
   }
 }
 ```
 
 (Key is namespaced so the planned `printable-openscad` backend can register alongside without collision.)
 
-For other agents (Goose, Cursor, etc.) — wire it up using your agent's standard MCP server configuration.
+For other agents (Goose, Cursor, etc.) — wire it up using your agent's standard MCP server configuration. The command is `printable`; no args needed.
+
+### Agent skills (optional)
+
+This repo bundles four [Claude Code skills](https://code.claude.com/docs/en/skills) under [`.claude/skills/`](.claude/skills/) — short shims that point at the same `docs/` content the MCP exposes as resources. Claude Code auto-discovers them when you launch it in the repo:
+
+```bash
+git clone https://github.com/AaronGoldsmith/mcp-printable
+cd mcp-printable && claude
+```
+
+The 4 skills:
+- `print-in-place` — design rules for moving-parts mechanisms (hinges, ball-sockets, snap fits)
+- `blender-design-loop` — plan→build→verify→validate→export workflow
+- `image-displacement` — turn a 2D image into 3D printable relief
+- `blender-app` — launch / restart / multi-instance Blender setup
+
+For Claude Code, copy a skill into `~/.claude/skills/` to make it available across all projects. **For other agents** (Codex, Cursor, Goose, ...) — see [AGENTS.md](AGENTS.md), which links each skill into the equivalent location for your agent and explains the MCP-resource fallback for agents that don't load project skills.
 
 ## Tool families
 
@@ -94,8 +130,6 @@ Each doc is exposed both as a filesystem path and as an MCP resource. Resource-a
 | URI | File | Purpose |
 |---|---|---|
 | `printable://design/print-in-place` | [docs/design/print-in-place.md](docs/design/print-in-place.md) | FDM mechanism design: cardinal print-path rule, clearances, patterns, validation checklist (**backend-agnostic**) |
-| `printable://design/recipes/wheel-on-axle` | [docs/design/print-in-place/recipes/wheel-on-axle.md](docs/design/print-in-place/recipes/wheel-on-axle.md) | Validated toy-car wheel parameters |
-| `printable://design/recipes/flip-tile` | [docs/design/print-in-place/recipes/flip-tile.md](docs/design/print-in-place/recipes/flip-tile.md) | Validated closed-bore flip-tile parameters |
 | `printable://blender/design-loop` | [docs/blender/design-loop.md](docs/blender/design-loop.md) | Plan→build→verify→validate→export workflow, boolean rules, failure modes |
 | `printable://blender/image-displacement` | [docs/blender/image-displacement.md](docs/blender/image-displacement.md) | 2D image → printable 3D relief |
 | `printable://blender/blender-app` | [docs/blender/blender-app.md](docs/blender/blender-app.md) | Launch / restart / multi-instance setup |
@@ -105,9 +139,6 @@ Each doc is exposed both as a filesystem path and as an MCP resource. Resource-a
 docs/
 ├── design/                          # backend-agnostic design rules
 │   └── print-in-place.md
-│       └── recipes/
-│           ├── wheel-on-axle.md
-│           └── flip-tile.md
 ├── blender/                         # Blender-specific
 │   ├── design-loop.md
 │   ├── image-displacement.md
@@ -125,12 +156,18 @@ python evals/runner.py              # policy-based regression evals (see evals/R
 
 Unit tests cover TCP protocol framing, image compositing (PIL), MCP tool registration. The eval suite checks that agents using the MCP actually follow the always-on rules (e.g. clear scene first, prefer `blender_boolean`, no monolithic `execute_code` blocks) — procedural checks from the tool trace, plus LLM-judged outcome policies for things like "moving parts have a continuous print path to the bed."
 
+## Roadmap
+
+Things on the list, not yet shipped:
+
+- **Validated parameter recipes** — turnkey parameter sets for common print-in-place mechanisms (wheel-on-axle, flip-tile, ball-and-socket, snap fit) so an agent can ask for "a toy car wheel" and get a known-good geometry without re-solving the clearance + retention math each time. Earlier drafts existed but weren't dialed in enough to ship as authoritative; new ones will land once they're validated against real prints.
+- **Blender app-lifecycle tools** (`blender_launch` / `blender_status` / `blender_kill`) — let the agent spin Blender up itself instead of needing the user to start it first.
+- **Second OpenSCAD parity pass** — match Blender's clearance-sweep / retention / thin-wall checks on the SCAD side.
+
 ## Contributing
 
-The interesting design surface is in `docs/`. If you discover a new mechanism pattern that prints reliably, add a recipe under `docs/design/print-in-place/recipes/` with validated parameters and any pitfalls. Recipes graduate from agent memory into the public docs once they're print-validated.
-
-For new policies (rules an agent should always follow), add a markdown file to `evals/policies/` and a scenario to `evals/scenarios/` so the eval runner picks it up.
+The interesting design surface is in `docs/`. New always-on rules belong in [`docs/design/`](docs/design/) (backend-agnostic) or [`docs/blender/`](docs/blender/) / [`docs/openscad/`](docs/openscad/) (backend-specific). If a rule should be enforced, also add a policy file under [`evals/policies/`](evals/policies/) and a scenario under [`evals/scenarios/`](evals/scenarios/) so the eval runner picks it up.
 
 ## License
 
-[Add license]
+MIT — see [`LICENSE`](LICENSE).

@@ -1,8 +1,28 @@
 [project]
-name = "printable"
+name = "mcp-printable"
 version = "0.1.0"
 description = "MCP server for AI-driven 3D modeling and print validation (FDM-focused). Agent-agnostic; works with any MCP client (Claude Code, Goose, Cursor, Codex, ...)."
+readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Aaron Goldsmith", email = "aargoldsmith@gmail.com" },
+]
+keywords = ["mcp", "3d-printing", "fdm", "blender", "openscad", "ai-agents", "claude", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "mcp[cli]>=1.0.0",
     "Pillow>=10.0.0",
@@ -13,13 +33,38 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+[project.urls]
+Homepage = "https://github.com/AaronGoldsmith/mcp-printable"
+Repository = "https://github.com/AaronGoldsmith/mcp-printable"
+Issues = "https://github.com/AaronGoldsmith/mcp-printable/issues"
+
 [project.scripts]
 printable = "server:main"
+printable-install-addon = "install:cli"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# Single-module server + the SCAD backend helper. The addon/ dir ships separately via install.py.
-only-include = ["server.py", "scad_backend.py"]
+# Top-level modules + bundled Blender addon. The addon ships with the wheel so
+# `printable-install-addon` (defined in [project.scripts]) can copy it into the
+# user's Blender addons directory without a separate clone.
+only-include = ["server.py", "scad_backend.py", "install.py", "addon"]
+
+[tool.hatch.build.targets.sdist]
+# Source dist gets the same modules plus docs and tests so people can run the
+# full eval / test suite from a tarball without cloning.
+include = [
+    "server.py",
+    "scad_backend.py",
+    "install.py",
+    "addon/",
+    "docs/",
+    "tests/",
+    "evals/",
+    "README.md",
+    "SETUP.md",
+    "LICENSE",
+    "pyproject.toml",
+]

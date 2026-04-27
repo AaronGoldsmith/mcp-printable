@@ -88,6 +88,11 @@ def install(target_path=None):
     print("  4. You should see '[Printable Bridge] Listening on 127.0.0.1:9876' in Blender's console")
 
 
-if __name__ == "__main__":
+def cli():
+    """Console-script entry point for `printable-install-addon`."""
     target = sys.argv[1] if len(sys.argv) > 1 else None
     install(target)
+
+
+if __name__ == "__main__":
+    cli()

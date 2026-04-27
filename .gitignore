@@ -25,3 +25,22 @@ printable_blender_scene.blend
 
 # Eval runtime
 evals/results/latest.json
+evals/results/baseline.json
+evals/results/logs/
+
+# Local MCP client config — user-specific, not part of the project
+.mcp.json
+
+# Experiment scratch — local work that shouldn't ship.
+# Drop one-off STLs / blends / scad / textures here.
+experiments/
+
+# Stray model artifacts at repo root (agents sometimes write here).
+# Subdirectories are unaffected — only catches accidental root pollution.
+/*.stl
+/*.blend
+/*.scad
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/

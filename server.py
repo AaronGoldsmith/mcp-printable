@@ -38,9 +38,11 @@ mcp = FastMCP(
         "code-first parametric. Cross-backend via STL (`blender_export_stl` -> "
         "`scad_import_stl`, or vice versa).\n\n"
         "BLENDER ALWAYS-ON RULES:\n"
-        "- Start every modeling task with `blender_clear_scene` — it auto-sets units to mm. "
-        "Building at the default 1m scale produces zero-volume meshes that pass watertight "
-        "checks but are useless. Verify `units.is_mm` in `blender_get_scene_info` if unsure.\n"
+        "- For a *fresh* modeling task, start with `blender_clear_scene` — it auto-sets units to mm. "
+        "Building at the default 1m scale produces zero-volume meshes that pass watertight checks "
+        "but are useless. If the user is iterating on an existing scene (\"tweak this hinge\", \"add "
+        "a fillet\"), do NOT clear — call `blender_get_scene_info` first to confirm `units.is_mm` "
+        "and orient yourself. Use clear_scene only on fresh builds.\n"
         "- Use `blender_boolean` for boolean operations. NEVER use `bpy.ops.object.join()` "
         "(creates internal faces) or raw bpy boolean modifiers in execute_code (failures "
         "are silent).\n"
@@ -71,8 +73,6 @@ mcp = FastMCP(
         "- `printable://design/print-in-place` — FDM mechanism design rules (cardinal "
         "print-path rule, clearance values, ball-socket / hinge / snap-fit / living-"
         "hinge patterns, validation checklist). READ THIS for any task with moving parts.\n"
-        "- `printable://design/recipes/wheel-on-axle`, `printable://design/recipes/flip-tile` "
-        "— validated parameter sets for common mechanisms.\n"
         "- `printable://blender/image-displacement` — 2D image to printable 3D relief.\n"
         "- `printable://blender/blender-app` — launch, restart, multi-instance setup."
     ),
@@ -278,20 +278,6 @@ def _read_doc(rel_path: str) -> str:
               description="Cardinal print-path rule, clearance values, ball-socket/hinge/snap-fit patterns, validation checklist. READ FIRST for any moving-parts mechanism.")
 def _res_print_in_place() -> str:
     return _read_doc("design/print-in-place.md")
-
-
-@mcp.resource("printable://design/recipes/wheel-on-axle", mime_type="text/markdown",
-              name="Recipe: Wheel on Axle",
-              description="Validated parameters for a toy-car-style wheel that prints in place around a body-spanning axle with retention caps.")
-def _res_recipe_wheel() -> str:
-    return _read_doc("design/print-in-place/recipes/wheel-on-axle.md")
-
-
-@mcp.resource("printable://design/recipes/flip-tile", mime_type="text/markdown",
-              name="Recipe: Closed-Bore Flip Tile",
-              description="Validated parameters for a tic-tac-toe-style flip tile in a closed bore — no pins, no sockets.")
-def _res_recipe_flip_tile() -> str:
-    return _read_doc("design/print-in-place/recipes/flip-tile.md")
 
 
 @mcp.resource("printable://blender/design-loop", mime_type="text/markdown",
