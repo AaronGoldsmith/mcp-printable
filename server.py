@@ -60,6 +60,14 @@ mcp = FastMCP(
         "DESIGN LOOP: plan (compute coords -> print -> verify math) -> build (small steps -> "
         "mesh_health) -> verify (renders + cross-sections) -> validate (printability + "
         "clearance) -> export (bundled STL).\n\n"
+        "PRINTABILITY DOCTRINE — design for SUPPORT-FREE printing by default. When "
+        "`full_printability_check` or `scad_validate_printability` flags overhangs, prefer "
+        "design changes over accepting supports: angle features >=45 deg from horizontal, "
+        "flatten the print-bed surface (boolean a cube below the part), sink/chamfer "
+        "overhangs into adjacent geometry, tilt or merge protruding features into the body. "
+        "Treat \"this needs supports\" as a last resort — name the redesign you ruled out "
+        "before suggesting supports. Inherent overhangs (a sphere's lower hemisphere) are "
+        "the only legitimate exception and should be called out as such.\n\n"
         "OPENSCAD ALWAYS-ON RULES:\n"
         "- Use $fn=24 during iterative design, raise to 60+ for final export.\n"
         "- Cross-section verifies internal truth — `scad_render_views` shows the silhouette only.\n"
@@ -413,17 +421,11 @@ async def blender_boolean(
     keep_cutter: bool = False,
     solver: str = "EXACT",
 ) -> str:
-    """Perform a boolean operation on two mesh objects, with built-in safety checks.
+    """Boolean op on two meshes with built-in connectivity + manifold checks. Always prefer this over raw modifiers in execute_code.
 
-    PREFER THIS OVER execute_code for booleans — it handles context management,
-    modifier ordering, and automatically checks connectivity and manifold after.
-
-    operation: DIFFERENCE (subtract), UNION (add), or INTERSECT (keep overlap)
-    keep_cutter: if False (default), deletes the cutter object after the operation
-    solver: EXACT (default, more reliable) or FAST (faster, less reliable)
-
-    Returns face count before/after, connected components, and any warnings.
-    WARNING means the boolean may have silently failed (check the numbers).
+    operation: DIFFERENCE | UNION | INTERSECT. solver: EXACT (reliable) | FAST.
+    Returns face counts, connected components, warnings. A WARNING means the
+    boolean may have silently failed — inspect the numbers and re-run.
     """
     result = blender.send("boolean", {
         "target": target,
@@ -445,26 +447,11 @@ async def blender_boolean(
                  "idempotentHint": False, "openWorldHint": False},
 )
 async def blender_execute_code(code: str) -> str:
-    """Execute Python code in Blender (bpy, bmesh, mathutils, Vector, Matrix, Euler, math available).
+    """Run Python in Blender (bpy, bmesh, mathutils, math available). Set `__result__` to return a value. Keep under ~20 lines.
 
-    WHEN TO USE: Creating/modifying geometry, applying modifiers, boolean operations.
-    IMPORTANT: Use boolean union (modifier type='BOOLEAN', operation='UNION') to combine
-    geometry. NEVER use bpy.ops.object.join() — it creates internal faces and breaks the mesh.
-    After calling this, always call blender_mesh_health to verify the result.
-    Set __result__ to return a value. Keep code under 20 lines.
-
-    Example — create a cylinder and boolean-union it onto an existing object:
-        bpy.ops.mesh.primitive_cylinder_add(radius=4, depth=10, location=(0, 0, 5))
-        cyl = bpy.context.active_object
-        cyl.name = "knuckle_A"
-        # Boolean union onto the plate:
-        mod = plate.modifiers.new("union_knuckle", 'BOOLEAN')
-        mod.operation = 'UNION'
-        mod.object = cyl
-        bpy.context.view_layer.objects.active = plate
-        bpy.ops.object.modifier_apply(modifier="union_knuckle")
-        bpy.data.objects.remove(cyl, do_unlink=True)
-        __result__ = f"Unioned knuckle onto {plate.name}"
+    For boolean ops use `blender_boolean` instead — it's safer and validates the
+    result. NEVER use `bpy.ops.object.join()` (creates internal faces). After any
+    geometry change call `blender_mesh_health` to verify watertight + manifold.
     """
     result = blender.send("execute_code", {"code": code})
     parts = []
@@ -493,18 +480,11 @@ async def blender_get_screenshot(
     isolate: bool = False,
     zoom: float = 1.0,
 ) -> Any:
-    """Capture a single screenshot from a specific camera angle.
+    """Single screenshot from a custom camera angle. Use when render_tiled's 4 fixed views miss what you need.
 
-    WHEN TO USE: When you need a specific viewpoint that render_tiled doesn't cover.
-    For example, "show me the barrel connection from below" = elevation=-20, azimuth=45.
-    Use focus_object to zoom into a specific part instead of framing the whole scene.
-    Use isolate=True to hide other objects that create visual noise.
-
-    elevation: degrees above horizontal (0=side, 90=top, -20=slightly below)
-    azimuth: horizontal rotation (0=front, 90=right, 180=back, 270=left)
-    focus_object: camera targets this object's bounds, not the whole scene
-    isolate: hide everything except focus_object
-    zoom: >1.0 crops tighter (2.0 = 2x zoom on the target)
+    elevation: deg above horizontal (0=side, 90=top, negative=below).
+    azimuth: deg rotation (0=front, 90=right, 180=back).
+    focus_object + isolate: frame and isolate one part for a clean detail view.
     """
     params = {
         "elevation": elevation, "azimuth": azimuth,
@@ -529,16 +509,11 @@ async def blender_render_tiled(
     isolate: bool = False,
     zoom: float = 1.0,
 ) -> Any:
-    """Render 4 angles (iso/front/right/top) in a single labeled grid image.
+    """4-angle labeled grid render — your primary feedback tool after every modeling step.
 
-    WHEN TO USE: After every major modeling step. This is your primary feedback tool.
-    Call it with no args for a scene overview. Use focus_object to inspect one part.
-    If something looks wrong, follow up with cross_section_gallery for internal truth.
-
-    angles: which views (default: iso, front, right, top). Available: iso, front, back, right, left, top
-    focus_object: camera targets this object's bounds — use when inspecting a specific part
-    isolate: hide everything except focus_object for a clean view
-    zoom: >1.0 crops tighter on the target (e.g., 2.0 for detailed view of a barrel)
+    Default views: iso/front/right/top. Available: iso, front, back, right, left, top.
+    Use focus_object (+isolate) to zoom into a specific part. Follow up with
+    cross_section_gallery if internal geometry needs verification.
     """
     if angles is None:
         angles = ['iso', 'front', 'right', 'top']
@@ -563,16 +538,9 @@ async def blender_render_turntable(
     isolate: bool = True,
     zoom: float = 1.0,
 ) -> Any:
-    """Render N evenly-spaced angles around a specific object in a tiled grid.
+    """N-angle turntable around one object. Use for cylindrical geometry (barrels, pins) where 4 fixed angles miss details.
 
-    WHEN TO USE: When you need to understand a feature from all sides — especially
-    cylindrical geometry (barrels, pins, knuckles) where 4 fixed angles miss details.
-    Also useful to verify knuckle gaps, chamfers, and barrel-to-plate connections.
-
-    steps: number of angles (8 = every 45 degrees, 12 = every 30 degrees)
-    elevation: camera height in degrees (20 = slightly above, 0 = eye level, -15 = below)
-    isolate: hide other objects (default True — you usually want a clean view)
-    zoom: >1.0 zooms in tighter on the object
+    steps=8 → every 45°, steps=12 → every 30°. elevation in degrees (negative=below).
     """
     result = blender.send("render_turntable", {
         "object_name": object_name, "steps": steps,
@@ -592,15 +560,9 @@ async def blender_render_turntable(
 async def blender_cross_section(
     object_name: str, axis: str = "z", percent: float = 50,
 ) -> Any:
-    """Cut an object with a plane and render the exposed internal face.
+    """Cut and render the exposed internal face. Use to verify internal geometry that renders can't show: pin holes, wall thickness, knuckle interleave, clearance gaps.
 
-    WHEN TO USE: When renders show a shape but you can't tell if the INSIDE is correct.
-    Critical for: pin holes (are they through?), wall thickness (solid or hollow?),
-    knuckle interleave (do the barrels actually alternate?), clearance gaps (visible gap?).
-    Renders only show silhouettes — cross-sections show the truth.
-
-    axis: x, y, or z (which direction to cut)
-    percent: 0-100 (where along the axis — 50 = middle, 25 = quarter way)
+    percent: 0-100, position along the chosen axis (50 = middle).
     """
     result = blender.send("cross_section", {
         "object_name": object_name, "axis": axis, "percent": percent,
@@ -619,14 +581,9 @@ async def blender_cross_section_gallery(
     axes: list[str] | None = None,
     percents: list[float] | None = None,
 ) -> Any:
-    """Tiled grid of cross-sections at multiple positions along one or more axes.
+    """Grid of cross-sections at multiple positions along one or more axes. The only way to verify complex internal geometry (knuckle interleave, pin holes, socket bores).
 
-    WHEN TO USE: After building complex internal geometry (knuckle interleave, pin holes,
-    socket bores). This is the ONLY way to verify internal features — renders can't see inside.
-    The X-axis slices are usually most informative for hinges (shows knuckle alternation).
-
-    axes: which axes to slice along (default: all three)
-    percents: where to cut on each axis (default: 10%, 30%, 50%, 70%, 90%)
+    Default: all 3 axes × [10, 30, 50, 70, 90]%. X-axis slices are usually most informative for hinges.
     """
     if axes is None:
         axes = ['x', 'y', 'z']
@@ -724,15 +681,11 @@ async def blender_render_before_after(code: str) -> Any:
                  "idempotentHint": True, "openWorldHint": False},
 )
 async def blender_mesh_health(object_name: str) -> str:
-    """Fast mesh health checkpoint — call after EVERY boolean operation.
+    """Fast mesh health checkpoint (<10ms). MANDATORY after any geometry-modifying execute_code or boolean.
 
-    WHEN TO USE: Immediately after any execute_code that modifies geometry.
-    WHAT TO CHECK in the response:
-    - is_watertight should be True (False = boolean left holes)
-    - non_manifold_edges should be 0 (>0 = geometry is broken, redo the boolean)
-    - degenerate_faces should be 0 (>0 = zero-area faces from bad boolean)
-    - dimensions_mm should match your design intent (wrong = boolean ate geometry)
-    This is fast (<10ms). There is no reason to skip it.
+    Pass criteria: is_watertight=True, non_manifold_edges=0, degenerate_faces=0,
+    dimensions_mm matches design intent. Any failure means redo the operation —
+    don't proceed to the next step on broken geometry.
     """
     result = blender.send("mesh_health", {"object_name": object_name})
     return json.dumps(result, indent=2)
@@ -744,13 +697,10 @@ async def blender_mesh_health(object_name: str) -> str:
                  "idempotentHint": True, "openWorldHint": False},
 )
 async def blender_check_intersection(object_a: str, object_b: str) -> str:
-    """Check if two objects' meshes physically overlap (geometry intersects).
+    """Check if two meshes physically overlap. Use after assembly — separate parts should NEVER intersect (would mean a boolean went wrong, or parts were placed too close).
 
-    WHEN TO USE: After assembling multi-part designs. Intersection = broken geometry.
-    Two separate objects should NEVER intersect — if they do, a boolean went wrong
-    or parts were placed too close. Distinct from clearance (which measures distance
-    between non-touching objects). Use this to validate that separate parts are truly separate.
-    Returns intersects=True/False and the count of overlapping face pairs.
+    Distinct from clearance (which measures distance between non-touching objects).
+    Returns intersects=bool + count of overlapping face pairs.
     """
     result = blender.send("check_intersection", {
         "object_a": object_a, "object_b": object_b,
@@ -769,21 +719,9 @@ async def blender_check_retention(
     direction: str = "+Z",
     displacement: float = 20.0,
 ) -> str:
-    """Check whether a moving part is physically captive by simulating displacement.
+    """Verify a moving part is captive by translating it `displacement` mm in `direction` and checking intersection with `static_objects`. Returns CAPTIVE or FREE.
 
-    Translates moving_object by displacement mm in direction, then checks if it
-    intersects any static_objects. Returns CAPTIVE if blocked, FREE if not.
-
-    Use this to verify print-in-place retention mechanisms before printing:
-    - Car body on axle: direction='+Z', static_objects=['wheel_FL','wheel_FR',...]
-    - Ball in socket: direction='+Y' (or any direction), static_objects=['socket']
-    - Hinge pin: direction='+X', static_objects=['barrel']
-
-    Args:
-        moving_object: Name of the part that should be captive
-        static_objects: Names of parts that should block the moving part
-        direction: Displacement direction: '+Z', '-Z', '+X', '-X', '+Y', '-Y'
-        displacement: How far to displace in mm (default 20mm)
+    direction: '+X'/'-X'/'+Y'/'-Y'/'+Z'/'-Z'. Use for: car body on axles, ball in socket, hinge pin in barrel.
     """
     result = blender.send("check_retention", {
         "moving_object": moving_object,
@@ -806,10 +744,9 @@ async def blender_check_retention(
 async def blender_check_overhangs(
     object_name: str, angle_threshold: float = 45.0,
 ) -> str:
-    """Check for overhang faces that exceed the angle threshold from vertical.
+    """Count overhang faces beyond `angle_threshold` from vertical. FDM struggles past 45°.
 
-    FDM printers struggle with overhangs beyond 45 degrees. Returns face count,
-    worst angle, and Z-height of the worst overhang.
+    Returns face count, worst angle, and Z-height of the worst overhang.
     """
     result = blender.send("check_overhangs", {
         "object_name": object_name, "angle_threshold": angle_threshold,
@@ -825,9 +762,8 @@ async def blender_check_overhangs(
 async def blender_check_thin_walls(
     object_name: str, min_thickness_mm: float = 0.8,
 ) -> str:
-    """Check for walls thinner than the minimum by raycasting through the mesh.
+    """Find walls thinner than `min_thickness_mm` via raycast. Default 0.8mm ≈ 2× a 0.4mm nozzle.
 
-    Default threshold (0.8mm) is approximately 2x a 0.4mm nozzle width.
     Returns thin face count and the thinnest wall found.
     """
     result = blender.send("check_thin_walls", {
@@ -844,11 +780,7 @@ async def blender_check_thin_walls(
 async def blender_check_clearance(
     object_a: str, object_b: str, min_clearance_mm: float = 0.3,
 ) -> str:
-    """Check minimum clearance between two objects.
-
-    For print-in-place mechanisms, parts need sufficient gap to avoid fusing.
-    Default 0.3mm is typical for FDM.
-    """
+    """Minimum gap between two objects. Default 0.3mm is typical FDM print-in-place clearance — below this, parts fuse."""
     result = blender.send("check_clearance", {
         "object_a": object_a, "object_b": object_b,
         "min_clearance_mm": min_clearance_mm,
@@ -866,13 +798,11 @@ async def blender_check_clearance_sweep(
     axis: str = "Z", steps: int = 36,
     min_clearance_mm: float = 0.3,
 ) -> str:
-    """Rotate inner_object through 360 degrees and check clearance at each step.
+    """Rotate inner_object through 360° and check clearance at each step. MANDATORY for any joint, hinge, or articulating mechanism.
 
-    WHEN TO USE: MANDATORY for any joint, hinge, or articulating mechanism.
-    This is the only way to verify the part can actually move without collision.
-    A hinge that looks fine at 0 degrees may collide at 90 degrees.
-    Returns the worst-case clearance and the exact angle where it occurs.
-    If passes=False, the joint WILL fuse during printing.
+    A hinge that looks fine at 0° may collide at 90°. Returns worst-case
+    clearance and the angle where it occurs. passes=False → the joint WILL
+    fuse during printing.
     """
     result = blender.send("check_clearance_sweep", {
         "inner_object": inner_object, "outer_object": outer_object,
@@ -893,11 +823,10 @@ async def blender_full_printability_check(
     clearance_partners: list[str] | None = None,
     min_clearance_mm: float = 0.3,
 ) -> str:
-    """Run ALL printability checks: overhangs, thin walls, mesh health, and clearance.
+    """Run ALL printability checks (overhangs, thin walls, mesh health, clearance). The final gate before STL export — run on every mesh object.
 
-    WHEN TO USE: Before exporting STL — this is the final gate. Run on EVERY mesh object.
-    If clearance_partners is set, also checks clearance between this object and partners.
-    Returns a comprehensive PASS/FAIL verdict. Do not export if any object fails.
+    Set clearance_partners to also check clearance against named neighbors.
+    PASS/FAIL verdict; do not export if any object FAILs.
     """
     params = {
         "object_name": object_name,
@@ -926,17 +855,12 @@ async def blender_export_stl(
     object_names: list[str] | None = None,
     binary: bool = True,
 ) -> str:
-    """Export mesh(es) to a single STL file for 3D printing.
+    """Export mesh(es) to a single STL for 3D printing. Warns about non-manifold edges.
 
-    With no object args: exports ALL mesh objects bundled into one STL (most common for printing).
-    object_name: export only one object.
-    object_names: export specific objects bundled into one STL (e.g., ["leaf_A", "leaf_B", "pin"]).
-    Warns about non-manifold edges.
-
-    Relative paths are resolved against the MCP server's working directory (where
-    you launched your agent) — NOT Blender's. Blender's cwd is typically its
-    install dir, which is read-only on Windows; resolving here avoids silent
-    "cannot open file" errors against `C:\\Program Files\\...`.
+    With no object args: exports ALL mesh objects bundled into one STL (most
+    common for printing). Use object_name for one part, object_names=[...] for
+    a specific bundle. Relative paths resolve against the MCP server's cwd, not
+    Blender's (which is its install dir, read-only on Windows).
     """
     # Resolve here so the addon receives an absolute path under a writable dir.
     # os.path.abspath uses the MCP process's cwd, which is the user's project
@@ -1018,14 +942,10 @@ def _scad_unavailable_msg() -> str:
 )
 async def scad_compile(code: str, output_path: str | None = None,
                         timeout: int = 120) -> str:
-    """Compile OpenSCAD code to an STL file via the CGAL renderer.
+    """Compile OpenSCAD code to STL via CGAL. Always follow with `scad_validate_printability` on the result.
 
-    Returns the STL path on success, or a structured error on failure. Use
-    `scad_validate_printability` to inspect the resulting mesh.
-
-    `output_path` is resolved against the MCP server's working directory if
-    relative — pass `"cube.stl"` and you'll get `<your-project>/cube.stl`,
-    not a tempdir path you can't find later. Omit to write to a tempdir.
+    output_path: relative paths resolve against MCP server cwd (so `"cube.stl"`
+    lands in your project dir, not Blender's). Omit to write to a tempdir.
     """
     if scad_backend.find_openscad() is None:
         return _scad_unavailable_msg()
@@ -1093,10 +1013,9 @@ async def scad_render_views(code: str, views: list[str] | None = None,
 async def scad_cross_section(code: str, axis: str = "z", percent: float = 50.0,
                                view: str = "iso", size: int = 512,
                                slab_thickness: float = 0.5):
-    """Slice the model with a thin slab and render the result.
+    """Slice the model with a thin slab and render the cut. The only reliable way to verify internal geometry (clearances, hollows, joints).
 
-    Use this to verify INTERNAL geometry (clearances, hollows, joints) — the
-    only reliable way to confirm what renders alone can't show.
+    percent: 0-100 along the chosen axis. slab_thickness in model units.
     """
     if scad_backend.find_openscad() is None:
         return _scad_unavailable_msg()
@@ -1122,10 +1041,9 @@ async def scad_cross_section(code: str, axis: str = "z", percent: float = 50.0,
 async def scad_validate_printability(stl_path: str,
                                       max_overhang_deg: float = 45.0,
                                       min_volume_mm3: float = 1.0) -> str:
-    """Run watertight / manifold / volume / overhang checks on an STL.
+    """Watertight / manifold / volume / overhang checks on an STL via trimesh. Run after every `scad_compile`.
 
-    Uses trimesh under the hood. Returns a PASS/WARN/FAIL verdict plus a
-    structured report. Run this on the STL output of `scad_compile`.
+    PASS/WARN/FAIL verdict + structured report.
     """
     try:
         report = scad_backend.validate_printability(
@@ -1167,11 +1085,9 @@ async def scad_validate_printability(stl_path: str,
                  "idempotentHint": True, "openWorldHint": False},
 )
 async def scad_import_stl(stl_path: str, convexity: int = 10) -> str:
-    """Return an OpenSCAD snippet that imports the given STL file.
+    """Return an OpenSCAD snippet that imports the given STL — for Blender→SCAD handoff or further parametric modification.
 
-    Use this to bring a Blender-exported (or any other) STL into a SCAD model
-    for further parametric modification. See the returned snippet's NOTE for
-    the --render-mode path caveat.
+    Returned snippet includes a NOTE about the --render-mode path caveat.
     """
     if not os.path.isfile(stl_path):
         return f"STL not found: {stl_path}"

@@ -45,7 +45,18 @@ bpy.context.preferences.view.show_splash = False
 
 Persistent across restarts (saved to user preferences).
 
-## Multiple Blender instances (parallel agent teams)
+## One Blender, multiple MCP clients (default — start here)
+
+Since v0.1.4, **a single Blender instance handles multiple MCP clients on the same port**. Claude Desktop, Claude Code, Goose — all of them can have `printable` enabled at the same time and they won't lock each other out. Each client opens a short-lived TCP connection per command and closes it when done; the addon's accept loop picks up the next waiting client. Commands still serialize on Blender's main thread (one execution at a time, that hasn't changed), but the *connect-time* contention is gone.
+
+**You almost certainly don't need multi-instance Blender.** Only reach for it when one of these is true:
+
+- You want **independent scenes** that shouldn't see each other's geometry (e.g., agent A drafts a wheel in one scene, agent B drafts an axle in another, then a third assembly step imports both STLs into a clean scene).
+- The **command queue throughput** of a single Blender main thread is the bottleneck — i.e., agents are spending more time waiting in line than working. Rare in practice for FDM-print modeling.
+
+If neither applies, run one Blender on the default port `9876` and let multiple clients share it.
+
+## Multiple Blender instances (true parallel scene work)
 
 Each instance needs a different TCP port. The addon reads its port from Blender preferences.
 
