@@ -33,7 +33,14 @@ Agent  <--stdio/MCP-->  server.py  <--TCP :9876-->  Blender addon
 
 ## Status
 
-v0.1.0 — alpha. Blender backend is feature-complete and dogfooded against real prints; OpenSCAD backend covers the parametric workflow but has fewer validation tools. API is stable enough to use but may shift before 1.0.
+v0.1.x — alpha. Blender backend is feature-complete and dogfooded against real prints; OpenSCAD backend covers the parametric workflow but has fewer validation tools. API is stable enough to use but may shift before 1.0.
+
+## Requirements
+
+- **Python 3.10+** for the MCP server.
+- **Blender 3.6+** if you're using the Blender backend (the bundled addon needs to be installed once and enabled in Blender's Preferences).
+- **OpenSCAD CLI** if you're using the SCAD backend (auto-discovered on PATH and in the standard install locations on Windows / macOS / Linux).
+- **An image-capable agent model.** The visual-feedback tools (`blender_get_screenshot`, `blender_render_tiled`, `blender_render_turntable`, `blender_cross_section*`, `blender_render_printability_heatmap`, `blender_render_with_dimensions`, `blender_render_before_after`, `scad_render_views`, `scad_cross_section`) return base64-encoded PNGs that the agent has to actually *see* to use them. Text-only models will still get tool results but can't interpret the rendered geometry — the design loop relies on the agent looking at renders and cross-sections to verify what it's built. Examples that work well: Claude Sonnet 4.x+, GPT-4o/5, Gemini 2.x Pro/Flash. Text-only models will technically run but won't catch shape-level mistakes.
 
 ## Setup
 

@@ -80,18 +80,18 @@ class CompileResult:
     duration_s: float = 0.0
 
 
-def compile_to_stl(code: str, out_path: Optional[str] = None,
+def compile_to_stl(code: str, output_path: Optional[str] = None,
                    timeout: int = 120) -> CompileResult:
     """Render OpenSCAD code to an STL file via CGAL.
 
-    The agent doesn't need to manage temp dirs — pass `out_path=None` and we
-    return a path under the system tempdir.
+    Pass `output_path=None` to write to a system tempdir path (returned in
+    `CompileResult.stl_path`). Pass an explicit path otherwise.
     """
     import time
 
-    if out_path is None:
-        out_path = os.path.join(tempfile.gettempdir(),
-                                f"printable_scad_{os.getpid()}.stl")
+    if output_path is None:
+        output_path = os.path.join(tempfile.gettempdir(),
+                                   f"printable_scad_{os.getpid()}.stl")
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".scad", delete=False,
                                       encoding="utf-8") as f:
@@ -100,12 +100,12 @@ def compile_to_stl(code: str, out_path: Optional[str] = None,
 
     t0 = time.time()
     try:
-        proc = _run_openscad(["-o", out_path, scad_path], timeout=timeout)
+        proc = _run_openscad(["-o", output_path, scad_path], timeout=timeout)
         duration = time.time() - t0
-        if proc.returncode != 0 or not os.path.isfile(out_path):
+        if proc.returncode != 0 or not os.path.isfile(output_path):
             return CompileResult(ok=False, stderr=proc.stderr or proc.stdout,
                                   duration_s=duration)
-        return CompileResult(ok=True, stl_path=out_path, stderr=proc.stderr,
+        return CompileResult(ok=True, stl_path=output_path, stderr=proc.stderr,
                               duration_s=duration)
     finally:
         try:

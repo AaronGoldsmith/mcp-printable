@@ -14,6 +14,10 @@ For human-facing setup and overview, see [README.md](README.md).
 - Domain-knowledge **MCP resources** under `printable://…` URIs (5 of them).
 - **Always-on rules** baked into the MCP server's `instructions` field — every connecting agent sees them automatically on `initialize`.
 
+## Required: image-capable model
+
+Many tools (`blender_render_*`, `blender_cross_section*`, `blender_get_screenshot`, `scad_render_views`, `scad_cross_section`) return base64 PNGs that the model is expected to *look at* — that's how the design loop catches shape-level mistakes the geometry math doesn't. If you're a text-only model, you'll receive the images but be unable to interpret them; treat that as a hard limitation and tell the user up front rather than continuing without visual feedback.
+
 ## Always-on rules
 
 These are also embedded in the MCP `instructions` field, but if your agent doesn't surface that, here they are directly:

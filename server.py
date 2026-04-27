@@ -999,16 +999,22 @@ def _scad_unavailable_msg() -> str:
     annotations={"readOnlyHint": False, "destructiveHint": False,
                  "idempotentHint": True, "openWorldHint": False},
 )
-async def scad_compile(code: str, out_path: str | None = None,
+async def scad_compile(code: str, output_path: str | None = None,
                         timeout: int = 120) -> str:
     """Compile OpenSCAD code to an STL file via the CGAL renderer.
 
     Returns the STL path on success, or a structured error on failure. Use
     `scad_validate_printability` to inspect the resulting mesh.
+
+    `output_path` is resolved against the MCP server's working directory if
+    relative — pass `"cube.stl"` and you'll get `<your-project>/cube.stl`,
+    not a tempdir path you can't find later. Omit to write to a tempdir.
     """
     if scad_backend.find_openscad() is None:
         return _scad_unavailable_msg()
-    result = scad_backend.compile_to_stl(code, out_path=out_path, timeout=timeout)
+    if output_path is not None:
+        output_path = os.path.abspath(output_path)
+    result = scad_backend.compile_to_stl(code, output_path=output_path, timeout=timeout)
     if not result.ok:
         return (
             f"COMPILE FAILED ({result.duration_s:.2f}s)\n\n"
