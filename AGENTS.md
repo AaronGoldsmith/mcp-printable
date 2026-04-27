@@ -79,8 +79,10 @@ Example MCP server config:
 
 ```json
 {
-  "printable-blender": {
-    "command": "printable"
+  "mcpServers": {
+    "printable": {
+      "command": "printable"
+    }
   }
 }
 ```

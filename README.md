@@ -60,19 +60,39 @@ python install.py               # equivalent to printable-install-addon
 
 ### Wire into your agent
 
-For Claude Code (`~/.claude.json` or project `.mcp.json`):
+For Claude Code (`~/.claude.json` or project `.mcp.json`), pick one of two options.
+
+**Option A — `uvx` (recommended; no prior install needed):**
 
 ```json
 {
-  "printable-blender": {
-    "command": "printable"
+  "mcpServers": {
+    "printable": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "mcp-printable", "printable"]
+    }
   }
 }
 ```
 
-(Key is namespaced so the planned `printable-openscad` backend can register alongside without collision.)
+`uvx` will pull `mcp-printable` from PyPI on first run and cache it. To pick up new releases later, run `uvx --refresh --from mcp-printable printable` once or pin a version with `mcp-printable@0.1.2`.
 
-For other agents (Goose, Cursor, etc.) — wire it up using your agent's standard MCP server configuration. The command is `printable`; no args needed.
+**Option B — global `pip install` (simpler if you already have `mcp-printable` on PATH):**
+
+```json
+{
+  "mcpServers": {
+    "printable": {
+      "command": "printable"
+    }
+  }
+}
+```
+
+Requires `pip install mcp-printable` to have put `printable` on your PATH first.
+
+For other agents (Goose, Cursor, etc.) — same command, wrapped in your agent's MCP server configuration.
 
 ### Agent skills (optional)
 

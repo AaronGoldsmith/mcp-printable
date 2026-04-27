@@ -28,6 +28,10 @@ from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger("printable_mcp")
 
+# Server name kept as `printable_blender` for back-compat with installed Blender
+# addons that bind to this exact module identifier. See docs/internals/naming.md
+# for the four-name story (PyPI: mcp-printable, CLI: printable, server name +
+# addon module: printable_blender, mcpServers entry key: freeform).
 mcp = FastMCP(
     "printable_blender",
     instructions=(
