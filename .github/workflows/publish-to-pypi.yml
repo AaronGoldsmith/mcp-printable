@@ -43,7 +43,15 @@ jobs:
           path: dist/
       - uses: astral-sh/setup-uv@v6
       - name: Publish to TestPyPI (OIDC)
-        run: uv publish --publish-url https://test.pypi.org/legacy/ dist/*
+        # --check-url skips uploads of files already on TestPyPI so commits to
+        # main don't fail just because the version hasn't been bumped yet. The
+        # production publish on tag push intentionally does NOT skip — re-pushing
+        # a tag should fail loudly, since it usually means a mistake.
+        run: |
+          uv publish \
+            --publish-url https://test.pypi.org/legacy/ \
+            --check-url https://test.pypi.org/simple/ \
+            dist/*
 
   publish-pypi:
     name: Publish to PyPI on tags
