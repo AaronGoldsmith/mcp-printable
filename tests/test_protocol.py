@@ -188,3 +188,87 @@ class TestBlenderConnectionProtocol:
         finally:
             server.close()
             t.join(timeout=2)
+
+    def test_socket_released_after_successful_send(self):
+        """Verify the socket is closed after each command so other clients can connect.
+
+        Without this, whichever MCP client connects first holds the bridge for
+        the lifetime of its process, starving every other client.
+        """
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(('127.0.0.1', 0))
+        port = server.getsockname()[1]
+        server.listen(1)
+
+        def mock_blender():
+            conn, _ = server.accept()
+            header = conn.recv(4)
+            length = struct.unpack('>I', header)[0]
+            data = conn.recv(length)
+            request = json.loads(data.decode('utf-8'))
+            response = {'id': request['id'], 'status': 'success', 'result': {}}
+            resp_data = json.dumps(response).encode('utf-8')
+            conn.sendall(struct.pack('>I', len(resp_data)) + resp_data)
+            conn.close()
+
+        t = threading.Thread(target=mock_blender, daemon=True)
+        t.start()
+
+        try:
+            conn = BlenderConnection(port=port)
+            conn.send("get_scene_info")
+            assert conn.sock is None, "BlenderConnection should release its socket after send"
+        finally:
+            server.close()
+            t.join(timeout=2)
+
+    def test_two_clients_interleave(self):
+        """Two BlenderConnection instances against the same server can both succeed.
+
+        Models the real-world case of Claude Desktop + Claude Code (or any two
+        MCP clients) both wanting to drive Blender — the addon's accept loop
+        picks them up in order because the MCP server side closes its socket
+        after each command.
+        """
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(('127.0.0.1', 0))
+        port = server.getsockname()[1]
+        server.listen(8)  # Mirror the new addon backlog
+
+        def mock_blender_serve_n(n: int):
+            """Accept n connections in sequence, respond to each, close."""
+            for _ in range(n):
+                conn, _ = server.accept()
+                header = conn.recv(4)
+                length = struct.unpack('>I', header)[0]
+                data = conn.recv(length)
+                request = json.loads(data.decode('utf-8'))
+                response = {'id': request['id'], 'status': 'success',
+                            'result': {'echo': request['command']}}
+                resp_data = json.dumps(response).encode('utf-8')
+                conn.sendall(struct.pack('>I', len(resp_data)) + resp_data)
+                conn.close()
+
+        # We'll fire 4 commands across 2 clients — server must serve all 4.
+        t = threading.Thread(target=mock_blender_serve_n, args=(4,), daemon=True)
+        t.start()
+
+        try:
+            client_a = BlenderConnection(port=port)
+            client_b = BlenderConnection(port=port)
+
+            # Interleaved: A, B, A, B
+            r1 = client_a.send("cmd_a1")
+            r2 = client_b.send("cmd_b1")
+            r3 = client_a.send("cmd_a2")
+            r4 = client_b.send("cmd_b2")
+
+            assert r1 == {'echo': 'cmd_a1'}
+            assert r2 == {'echo': 'cmd_b1'}
+            assert r3 == {'echo': 'cmd_a2'}
+            assert r4 == {'echo': 'cmd_b2'}
+        finally:
+            server.close()
+            t.join(timeout=5)

@@ -130,7 +130,14 @@ class BlenderConnection:
         return buf
 
     def send(self, command: str, params: dict | None = None, timeout: float = 120) -> dict:
-        """Send a command to Blender and return the result."""
+        """Send a command to Blender and return the result.
+
+        Opens a fresh TCP connection per command and closes it before returning,
+        so multiple MCP clients can share the same Blender bridge without one
+        client holding the socket and starving the others. The cost is one
+        localhost TCP setup per command (sub-millisecond, lost in the noise of
+        actual Blender work).
+        """
         try:
             self._connect()
         except ConnectionError:
@@ -150,6 +157,16 @@ class BlenderConnection:
         except (ConnectionError, OSError, socket.timeout) as e:
             self.sock = None
             raise ConnectionError(f"Lost connection to Blender: {e}")
+        finally:
+            # Always close the socket so the addon's accept loop can pick up
+            # the next waiting client. Without this, whichever MCP server
+            # connected first holds the bridge until its process exits.
+            if self.sock is not None:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+                self.sock = None
 
         if response.get('status') == 'error':
             error_msg = response.get('error', 'Unknown error')

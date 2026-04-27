@@ -147,14 +147,22 @@ def _server_loop(host, port):
 
     try:
         _server_socket.bind((host, port))
-        _server_socket.listen(1)
+        # Backlog of 8 lets multiple MCP clients (Claude Desktop + Claude Code +
+        # Goose, etc.) queue their connections instead of getting refused.
+        # Commands still serialize on Blender's main thread via bpy.app.timers
+        # — the backlog just prevents connect-time rejection. Paired with the
+        # MCP server's connect-per-command behavior in BlenderConnection.send,
+        # this lets clients interleave fairly at the request granularity.
+        _server_socket.listen(8)
         print(f"[Printable Bridge] Listening on {host}:{port}")
 
         while _running:
             try:
                 conn, addr = _server_socket.accept()
                 conn.settimeout(None)  # Blocking reads on client connection
-                # Handle one client at a time (single-user tool)
+                # Handle one client at a time. With short-lived per-command
+                # connections from the MCP server, the next waiting client gets
+                # picked up as soon as this one disconnects.
                 _handle_client(conn, addr)
             except socket.timeout:
                 continue
