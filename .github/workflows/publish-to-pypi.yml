@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: read
     environment:
       name: pypi
       url: https://pypi.org/p/mcp-printable
