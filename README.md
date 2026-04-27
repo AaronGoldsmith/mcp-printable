@@ -125,7 +125,12 @@ For mechanism design (hinges, ball-sockets, snap fits, articulated chains): [`do
 
 ## Documents
 
-Each doc is exposed both as a filesystem path and as an MCP resource. Resource-aware clients should prefer the URI.
+Every doc below is served two ways:
+
+1. **As an MCP resource** under `printable://…` — the **preferred** path. Resource-aware clients fetch via `resources/read`, get the same content the maintainer ships, and don't need filesystem access to the project. Resources travel with the MCP server itself, so a `pip install mcp-printable` user has the docs even without cloning the repo.
+2. **As a file in `docs/`** — fallback for filesystem-based clients, and for humans browsing the repo.
+
+If you're writing an MCP client, prefer the URI. The filesystem path is documented mainly so a human can click through from this README.
 
 | URI | File | Purpose |
 |---|---|---|
