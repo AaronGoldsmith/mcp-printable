@@ -1,6 +1,6 @@
 [project]
 name = "mcp-printable"
-version = "0.1.4"
+version = "0.1.5"
 description = "MCP server for AI-driven 3D modeling and print validation (FDM-focused). Agent-agnostic; works with any MCP client (Claude Code, Goose, Cursor, Codex, ...)."
 readme = "README.md"
 requires-python = ">=3.10"
