@@ -342,8 +342,21 @@ def handle_render_turntable(params):
 
 def handle_cross_section(params):
     _ensure_scene_lighting()
-    obj = utils.resolve_object(params['object_name'])
-    utils.require_mesh(obj)
+
+    # Accept either object_name (str) or object_names (list). Exactly one required.
+    name = params.get('object_name')
+    names = params.get('object_names')
+    if names:
+        if not isinstance(names, list) or len(names) == 0:
+            raise ValueError("object_names must be a non-empty list")
+        objs = [utils.resolve_object(n) for n in names]
+    elif name:
+        objs = [utils.resolve_object(name)]
+    else:
+        raise ValueError("Provide either 'object_name' or 'object_names'")
+    for o in objs:
+        utils.require_mesh(o)
+
     axis = params.get('axis', 'z').upper()
     pct = params.get('percent', 50)
     width = params.get('width', 800)
@@ -357,29 +370,21 @@ def handle_cross_section(params):
     utils.auto_save_checkpoint()
 
     axis_idx = {'X': 0, 'Y': 1, 'Z': 2}[axis]
-    bb = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
-    min_val = min(v[axis_idx] for v in bb)
-    max_val = max(v[axis_idx] for v in bb)
-    cut_pos = min_val + (max_val - min_val) * (pct / 100)
 
-    # Duplicate the object
-    bpy.ops.object.select_all(action='DESELECT')
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.duplicate()
-    dup = bpy.context.active_object
-    dup.name = "_claude_cross_section_tmp"
+    # Union bbox across all input objects — drives both cut_pos and cutter sizing.
+    union_corners = []
+    for o in objs:
+        for c in o.bound_box:
+            union_corners.append(o.matrix_world @ Vector(c))
+    bb_min = [min(v[i] for v in union_corners) for i in range(3)]
+    bb_max = [max(v[i] for v in union_corners) for i in range(3)]
+    cut_pos = bb_min[axis_idx] + (bb_max[axis_idx] - bb_min[axis_idx]) * (pct / 100)
 
-    # Create cutting box
+    # One cutter sized to span the union bbox + buffer on the cut axis;
+    # full union extent on the other two axes.
     bpy.ops.mesh.primitive_cube_add(size=1)
     cutter = bpy.context.active_object
     cutter.name = "_claude_cutter_tmp"
-
-    # Size and place the cutter so its near face sits AT cut_pos and it
-    # extends past max_val on the cut axis, with full bbox coverage on the
-    # other two axes. Cube primitive is size=1, so world extent == scale.
-    bb_min = [min(v[i] for v in bb) for i in range(3)]
-    bb_max = [max(v[i] for v in bb) for i in range(3)]
     buf = 10.0
     sc = [0.0, 0.0, 0.0]
     lc = [0.0, 0.0, 0.0]
@@ -396,33 +401,42 @@ def handle_cross_section(params):
 
     bpy.context.view_layer.update()
 
-    # Boolean difference
-    bool_mod = dup.modifiers.new(name="CrossSection", type='BOOLEAN')
-    bool_mod.operation = 'DIFFERENCE'
-    bool_mod.object = cutter
-    bool_mod.solver = 'EXACT'
+    # Duplicate each input, apply the SAME boolean cut to each.
+    dups = []
+    for src in objs:
+        bpy.ops.object.select_all(action='DESELECT')
+        src.select_set(True)
+        bpy.context.view_layer.objects.active = src
+        bpy.ops.object.duplicate()
+        d = bpy.context.active_object
+        d.name = f"_claude_cross_section_tmp_{src.name}"
+        bool_mod = d.modifiers.new(name="CrossSection", type='BOOLEAN')
+        bool_mod.operation = 'DIFFERENCE'
+        bool_mod.object = cutter
+        bool_mod.solver = 'EXACT'
+        bpy.context.view_layer.objects.active = d
+        bpy.ops.object.modifier_apply(modifier="CrossSection")
+        dups.append(d)
 
-    bpy.context.view_layer.objects.active = dup
-    bpy.ops.object.modifier_apply(modifier="CrossSection")
-
-    # Hide original, cutter, and every other scene mesh so only the dup
-    # (which has a `_claude_` prefix and is exempted from isolate_objects)
-    # appears in the render.
-    obj.hide_render = True
+    # Hide each input, the cutter, and every other scene mesh so only the
+    # `_claude_`-prefixed dups appear in the render.
+    for o in objs:
+        o.hide_render = True
     cutter.hide_render = True
     hidden = utils.isolate_objects([])
 
-    # Frame the camera based on the DUP's bounds, not the whole-scene bounds.
-    # Otherwise the giant cutter dominates get_scene_bounds() and the camera
-    # ends up far away, rendering the cut face as a tiny silhouette.
+    # Frame the camera based on the union of DUP bounds (post-cut), not scene
+    # bounds — the giant cutter would otherwise dominate get_scene_bounds().
     bpy.context.view_layer.update()
-    dup_bb = [dup.matrix_world @ Vector(c) for c in dup.bound_box]
-    dup_min = Vector([min(v[i] for v in dup_bb) for i in range(3)])
-    dup_max = Vector([max(v[i] for v in dup_bb) for i in range(3)])
+    dup_corners = []
+    for d in dups:
+        for c in d.bound_box:
+            dup_corners.append(d.matrix_world @ Vector(c))
+    dup_min = Vector([min(v[i] for v in dup_corners) for i in range(3)])
+    dup_max = Vector([max(v[i] for v in dup_corners) for i in range(3)])
     dup_radius = max((dup_max - dup_min).length / 2, 1.0)
     cam_distance = dup_radius / math.sin(math.radians(50) / 2) * 1.2
 
-    # Camera looks face-on at the cut face along the cut axis.
     cam_angles = {
         'X': (0, 90 if pct <= 50 else -90),
         'Y': (0, 0 if pct <= 50 else 180),
@@ -436,43 +450,45 @@ def handle_cross_section(params):
     ])
     cam = utils.setup_render_camera(elev, azim, target=target, distance=cam_distance)
 
-    # Camera-aligned fill light. The default scene sun shines straight down,
-    # which leaves cut faces with horizontal normals (X/Y cuts) dark. Add a
-    # SUN lamp pointing FROM the camera toward the cut face so the cut face is
-    # always well-lit regardless of cut axis.
+    # Camera-aligned fill so cut faces with horizontal normals (X/Y cuts)
+    # are well-lit regardless of cut axis.
     fill_data = bpy.data.lights.new("_claude_xs_fill", type='SUN')
     fill_data.energy = 1.0
     fill_data.angle = math.radians(15)
     fill = bpy.data.objects.new("_claude_xs_fill", fill_data)
     bpy.context.collection.objects.link(fill)
     fill.location = cam.location
-    # Point the lamp at the cut target (sun lamps emit along their -Z axis)
     direction = target - fill.location
     fill.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
 
     try:
         b64 = utils.render_to_base64(width, height, camera=cam)
     finally:
-        # Cleanup
         cam_data = cam.data
         bpy.data.objects.remove(cam, do_unlink=True)
         bpy.data.cameras.remove(cam_data)
         bpy.data.objects.remove(fill, do_unlink=True)
         bpy.data.lights.remove(fill_data)
-        obj.hide_render = False
+        for o in objs:
+            o.hide_render = False
         utils.restore_visibility(hidden)
         utils.cleanup_temp_object(cutter)
-        utils.cleanup_temp_object(dup)
+        for d in dups:
+            utils.cleanup_temp_object(d)
 
     return {
         'image': b64, 'format': 'png',
         'axis': axis, 'percent': pct,
         'cut_position_mm': round(cut_pos, 2),
+        'object_count': len(objs),
     }
 
 
 def handle_cross_section_gallery(params):
-    obj_name = params['object_name']
+    obj_name = params.get('object_name')
+    obj_names = params.get('object_names')
+    if not obj_name and not obj_names:
+        raise ValueError("Provide either 'object_name' or 'object_names'")
     axes = params.get('axes', ['x', 'y', 'z'])
     percents = params.get('percents', [10, 30, 50, 70, 90])
     tile_w = params.get('tile_width', 300)
@@ -481,13 +497,17 @@ def handle_cross_section_gallery(params):
     renders = []
     for axis in axes:
         for pct in percents:
-            result = handle_cross_section({
-                'object_name': obj_name,
+            sub_params = {
                 'axis': axis,
                 'percent': pct,
                 'width': tile_w,
                 'height': tile_h,
-            })
+            }
+            if obj_names:
+                sub_params['object_names'] = obj_names
+            else:
+                sub_params['object_name'] = obj_name
+            result = handle_cross_section(sub_params)
             renders.append({
                 'label': f"{axis.upper()} {pct}%",
                 'image': result['image'],
