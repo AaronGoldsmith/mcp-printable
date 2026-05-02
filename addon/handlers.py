@@ -343,9 +343,15 @@ def handle_render_turntable(params):
 def handle_cross_section(params):
     _ensure_scene_lighting()
 
-    # Accept either object_name (str) or object_names (list). Exactly one required.
+    # Accept exactly one of object_name (str) or object_names (list).
+    # Rejecting the both-present case avoids silent footguns when callers
+    # leave a stale `object_name` alongside an updated `object_names`.
     name = params.get('object_name')
     names = params.get('object_names')
+    if name and names:
+        raise ValueError(
+            "Provide either 'object_name' or 'object_names', not both"
+        )
     if names:
         if not isinstance(names, list) or len(names) == 0:
             raise ValueError("object_names must be a non-empty list")
@@ -487,6 +493,10 @@ def handle_cross_section(params):
 def handle_cross_section_gallery(params):
     obj_name = params.get('object_name')
     obj_names = params.get('object_names')
+    if obj_name and obj_names:
+        raise ValueError(
+            "Provide either 'object_name' or 'object_names', not both"
+        )
     if not obj_name and not obj_names:
         raise ValueError("Provide either 'object_name' or 'object_names'")
     axes = params.get('axes', ['x', 'y', 'z'])
