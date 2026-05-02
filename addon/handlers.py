@@ -341,6 +341,7 @@ def handle_render_turntable(params):
 
 
 def handle_cross_section(params):
+    _ensure_scene_lighting()
     obj = utils.resolve_object(params['object_name'])
     utils.require_mesh(obj)
     axis = params.get('axis', 'z').upper()
@@ -374,19 +375,24 @@ def handle_cross_section(params):
     cutter = bpy.context.active_object
     cutter.name = "_claude_cutter_tmp"
 
-    # Size the cutter to encompass the object, positioned to cut one half
-    extent = (max_val - min_val) + 10
-    half = extent / 2
-    cutter.scale = [extent if i != axis_idx else half for i in range(3)]
-    loc = [0, 0, 0]
-    loc[axis_idx] = cut_pos + half
-    cutter.location = Vector(loc)
-    # Center the cutter on the other axes at the object center
-    center = (Vector([min(v[i] for v in bb) for i in range(3)]) +
-              Vector([max(v[i] for v in bb) for i in range(3)])) / 2
+    # Size and place the cutter so its near face sits AT cut_pos and it
+    # extends past max_val on the cut axis, with full bbox coverage on the
+    # other two axes. Cube primitive is size=1, so world extent == scale.
+    bb_min = [min(v[i] for v in bb) for i in range(3)]
+    bb_max = [max(v[i] for v in bb) for i in range(3)]
+    buf = 10.0
+    sc = [0.0, 0.0, 0.0]
+    lc = [0.0, 0.0, 0.0]
     for i in range(3):
-        if i != axis_idx:
-            cutter.location[i] = center[i]
+        if i == axis_idx:
+            sc[i] = max((bb_max[i] - cut_pos) + buf, 0.1)
+            lc[i] = cut_pos + sc[i] / 2
+        else:
+            sc[i] = (bb_max[i] - bb_min[i]) + buf
+            lc[i] = (bb_max[i] + bb_min[i]) / 2
+    cutter.scale = sc
+    cutter.location = Vector(lc)
+    center = (Vector(bb_min) + Vector(bb_max)) / 2
 
     bpy.context.view_layer.update()
 
@@ -399,22 +405,50 @@ def handle_cross_section(params):
     bpy.context.view_layer.objects.active = dup
     bpy.ops.object.modifier_apply(modifier="CrossSection")
 
-    # Hide original and cutter for render
+    # Hide original, cutter, and every other scene mesh so only the dup
+    # (which has a `_claude_` prefix and is exempted from isolate_objects)
+    # appears in the render.
     obj.hide_render = True
     cutter.hide_render = True
+    hidden = utils.isolate_objects([])
 
-    # Camera looks at the cut face
+    # Frame the camera based on the DUP's bounds, not the whole-scene bounds.
+    # Otherwise the giant cutter dominates get_scene_bounds() and the camera
+    # ends up far away, rendering the cut face as a tiny silhouette.
+    bpy.context.view_layer.update()
+    dup_bb = [dup.matrix_world @ Vector(c) for c in dup.bound_box]
+    dup_min = Vector([min(v[i] for v in dup_bb) for i in range(3)])
+    dup_max = Vector([max(v[i] for v in dup_bb) for i in range(3)])
+    dup_radius = max((dup_max - dup_min).length / 2, 1.0)
+    cam_distance = dup_radius / math.sin(math.radians(50) / 2) * 1.2
+
+    # Camera looks face-on at the cut face along the cut axis.
     cam_angles = {
         'X': (0, 90 if pct <= 50 else -90),
         'Y': (0, 0 if pct <= 50 else 180),
         'Z': (90 if pct <= 50 else -90, 0),
     }
     elev, azim = cam_angles[axis]
-    cam = utils.setup_render_camera(elev, azim, target=Vector([
+    target = Vector([
         center[0] if axis != 'X' else cut_pos,
         center[1] if axis != 'Y' else cut_pos,
         center[2] if axis != 'Z' else cut_pos,
-    ]))
+    ])
+    cam = utils.setup_render_camera(elev, azim, target=target, distance=cam_distance)
+
+    # Camera-aligned fill light. The default scene sun shines straight down,
+    # which leaves cut faces with horizontal normals (X/Y cuts) dark. Add a
+    # SUN lamp pointing FROM the camera toward the cut face so the cut face is
+    # always well-lit regardless of cut axis.
+    fill_data = bpy.data.lights.new("_claude_xs_fill", type='SUN')
+    fill_data.energy = 1.0
+    fill_data.angle = math.radians(15)
+    fill = bpy.data.objects.new("_claude_xs_fill", fill_data)
+    bpy.context.collection.objects.link(fill)
+    fill.location = cam.location
+    # Point the lamp at the cut target (sun lamps emit along their -Z axis)
+    direction = target - fill.location
+    fill.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
 
     try:
         b64 = utils.render_to_base64(width, height, camera=cam)
@@ -423,7 +457,10 @@ def handle_cross_section(params):
         cam_data = cam.data
         bpy.data.objects.remove(cam, do_unlink=True)
         bpy.data.cameras.remove(cam_data)
+        bpy.data.objects.remove(fill, do_unlink=True)
+        bpy.data.lights.remove(fill_data)
         obj.hide_render = False
+        utils.restore_visibility(hidden)
         utils.cleanup_temp_object(cutter)
         utils.cleanup_temp_object(dup)
 
