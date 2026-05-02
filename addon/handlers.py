@@ -341,6 +341,7 @@ def handle_render_turntable(params):
 
 
 def handle_cross_section(params):
+    _ensure_scene_lighting()
     obj = utils.resolve_object(params['object_name'])
     utils.require_mesh(obj)
     axis = params.get('axis', 'z').upper()
@@ -435,6 +436,20 @@ def handle_cross_section(params):
     ])
     cam = utils.setup_render_camera(elev, azim, target=target, distance=cam_distance)
 
+    # Camera-aligned fill light. The default scene sun shines straight down,
+    # which leaves cut faces with horizontal normals (X/Y cuts) dark. Add a
+    # SUN lamp pointing FROM the camera toward the cut face so the cut face is
+    # always well-lit regardless of cut axis.
+    fill_data = bpy.data.lights.new("_claude_xs_fill", type='SUN')
+    fill_data.energy = 1.0
+    fill_data.angle = math.radians(15)
+    fill = bpy.data.objects.new("_claude_xs_fill", fill_data)
+    bpy.context.collection.objects.link(fill)
+    fill.location = cam.location
+    # Point the lamp at the cut target (sun lamps emit along their -Z axis)
+    direction = target - fill.location
+    fill.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
+
     try:
         b64 = utils.render_to_base64(width, height, camera=cam)
     finally:
@@ -442,6 +457,8 @@ def handle_cross_section(params):
         cam_data = cam.data
         bpy.data.objects.remove(cam, do_unlink=True)
         bpy.data.cameras.remove(cam_data)
+        bpy.data.objects.remove(fill, do_unlink=True)
+        bpy.data.lights.remove(fill_data)
         obj.hide_render = False
         utils.restore_visibility(hidden)
         utils.cleanup_temp_object(cutter)

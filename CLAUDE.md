@@ -94,6 +94,38 @@ The `docs/` directory IS bundled in the wheel — `pyproject.toml`'s `[tool.hatc
 
 The local `.mcp.json` (gitignored) uses `uvx --refresh --from mcp-printable printable` so each session pulls the latest published version from PyPI. To pin during dev: `uvx --from mcp-printable@<version> printable`. To use the in-repo source: change command to `uv run --directory <repo-path> printable`.
 
+## Editing the Blender addon (gotcha)
+
+The Blender addon is INSTALLED into Blender's addons directory at first enable — Blender copies the source. Editing `addon/handlers.py` in the repo does NOT affect the running Blender; the live addon reads from the installed copy:
+
+- Windows: `%APPDATA%\Blender Foundation\Blender\<ver>\scripts\addons\printable_blender\`
+- macOS: `~/Library/Application Support/Blender/<ver>/scripts/addons/printable_blender/`
+- Linux: `~/.config/blender/<ver>/scripts/addons/printable_blender/`
+
+Workflow when iterating on the addon:
+
+1. Edit `addon/<file>.py` in the repo.
+2. Copy the changed file(s) to the installed location (`cp addon/handlers.py "<installed>/handlers.py"`).
+3. Reload in Blender. Two options:
+   - **Toggle the addon** in `Edit → Preferences → Add-ons` (uncheck + recheck "Printable Bridge"). Re-runs `register()`. Fully refreshes from the installed file.
+   - **Hot-reload from execute_code** (faster, no UI step):
+     ```python
+     import importlib, sys
+     importlib.invalidate_caches()
+     importlib.reload(sys.modules['printable_blender.handlers'])
+     ```
+     This works for `handlers.py` because `__init__.py` imports the `handlers` module by reference (so the dispatch table re-resolves attributes at call time). Do NOT reload the parent `printable_blender` package this way — the TCP server lives there and reloading kills it (you have to disable+re-enable to recover).
+4. Verify the new code is live before testing:
+   ```python
+   import inspect, sys
+   src = inspect.getsource(sys.modules['printable_blender.handlers'].handle_cross_section)
+   assert 'my_new_sentinel_string' in src
+   ```
+
+Without step 2 the reload reads the same stale installed file. Several debugging cycles have been wasted on this — verify with the sentinel check.
+
+For permanent dev workflow: symlink the installed dir to the repo (`mklink /D` on Windows, `ln -s` on Unix) so edits in the repo are immediately visible to Blender. Then only step 3 is needed.
+
 ## Current roadmap (loosely tracked here, see README "Roadmap" section for the user-facing version)
 
 - `blender_launch` / `blender_status` / `blender_kill` tools — let the agent start Blender itself instead of relying on user
