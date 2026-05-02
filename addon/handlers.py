@@ -404,22 +404,36 @@ def handle_cross_section(params):
     bpy.context.view_layer.objects.active = dup
     bpy.ops.object.modifier_apply(modifier="CrossSection")
 
-    # Hide original and cutter for render
+    # Hide original, cutter, and every other scene mesh so only the dup
+    # (which has a `_claude_` prefix and is exempted from isolate_objects)
+    # appears in the render.
     obj.hide_render = True
     cutter.hide_render = True
+    hidden = utils.isolate_objects([])
 
-    # Camera looks at the cut face
+    # Frame the camera based on the DUP's bounds, not the whole-scene bounds.
+    # Otherwise the giant cutter dominates get_scene_bounds() and the camera
+    # ends up far away, rendering the cut face as a tiny silhouette.
+    bpy.context.view_layer.update()
+    dup_bb = [dup.matrix_world @ Vector(c) for c in dup.bound_box]
+    dup_min = Vector([min(v[i] for v in dup_bb) for i in range(3)])
+    dup_max = Vector([max(v[i] for v in dup_bb) for i in range(3)])
+    dup_radius = max((dup_max - dup_min).length / 2, 1.0)
+    cam_distance = dup_radius / math.sin(math.radians(50) / 2) * 1.2
+
+    # Camera looks face-on at the cut face along the cut axis.
     cam_angles = {
         'X': (0, 90 if pct <= 50 else -90),
         'Y': (0, 0 if pct <= 50 else 180),
         'Z': (90 if pct <= 50 else -90, 0),
     }
     elev, azim = cam_angles[axis]
-    cam = utils.setup_render_camera(elev, azim, target=Vector([
+    target = Vector([
         center[0] if axis != 'X' else cut_pos,
         center[1] if axis != 'Y' else cut_pos,
         center[2] if axis != 'Z' else cut_pos,
-    ]))
+    ])
+    cam = utils.setup_render_camera(elev, azim, target=target, distance=cam_distance)
 
     try:
         b64 = utils.render_to_base64(width, height, camera=cam)
@@ -429,6 +443,7 @@ def handle_cross_section(params):
         bpy.data.objects.remove(cam, do_unlink=True)
         bpy.data.cameras.remove(cam_data)
         obj.hide_render = False
+        utils.restore_visibility(hidden)
         utils.cleanup_temp_object(cutter)
         utils.cleanup_temp_object(dup)
 
