@@ -567,7 +567,11 @@ async def blender_cross_section(
 
     percent: 0-100, position along the chosen axis (50 = middle).
     object_names: cut multiple objects with the same plane and render them together. Essential for verifying chain joints, ball-in-socket captivity, or any pair where parts wrap around each other.
+
+    Provide exactly one of object_name OR object_names — sending both raises ValueError to avoid silent precedence bugs.
     """
+    if object_name and object_names:
+        raise ValueError("Provide either object_name or object_names, not both")
     payload = {"axis": axis, "percent": percent}
     if object_names:
         payload["object_names"] = object_names
@@ -596,7 +600,11 @@ async def blender_cross_section_gallery(
 
     Default: all 3 axes × [10, 30, 50, 70, 90]%. X-axis slices are usually most informative for hinges.
     object_names: cut multiple objects with the same planes and render each tile with all of them. Use for chain joints / mating-part captivity verification.
+
+    Provide exactly one of object_name OR object_names — sending both raises ValueError to avoid silent precedence bugs.
     """
+    if object_name and object_names:
+        raise ValueError("Provide either object_name or object_names, not both")
     if axes is None:
         axes = ['x', 'y', 'z']
     if percents is None:
