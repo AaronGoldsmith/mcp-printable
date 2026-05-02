@@ -558,16 +558,26 @@ async def blender_render_turntable(
                  "idempotentHint": True, "openWorldHint": False},
 )
 async def blender_cross_section(
-    object_name: str, axis: str = "z", percent: float = 50,
+    object_name: str | None = None,
+    axis: str = "z",
+    percent: float = 50,
+    object_names: list[str] | None = None,
 ) -> Any:
     """Cut and render the exposed internal face. Use to verify internal geometry that renders can't show: pin holes, wall thickness, knuckle interleave, clearance gaps.
 
     percent: 0-100, position along the chosen axis (50 = middle).
+    object_names: cut multiple objects with the same plane and render them together. Essential for verifying chain joints, ball-in-socket captivity, or any pair where parts wrap around each other.
     """
-    result = blender.send("cross_section", {
-        "object_name": object_name, "axis": axis, "percent": percent,
-    })
-    text = f"Cross-section: {axis.upper()} axis at {percent}% (position: {result['cut_position_mm']}mm)"
+    payload = {"axis": axis, "percent": percent}
+    if object_names:
+        payload["object_names"] = object_names
+    elif object_name:
+        payload["object_name"] = object_name
+    else:
+        raise ValueError("Provide either object_name or object_names")
+    result = blender.send("cross_section", payload)
+    suffix = f" ({result.get('object_count', 1)} objects)" if result.get('object_count', 1) > 1 else ""
+    text = f"Cross-section: {axis.upper()} axis at {percent}% (position: {result['cut_position_mm']}mm){suffix}"
     return _text_and_image(text, result['image'])
 
 
@@ -577,22 +587,29 @@ async def blender_cross_section(
                  "idempotentHint": True, "openWorldHint": False},
 )
 async def blender_cross_section_gallery(
-    object_name: str,
+    object_name: str | None = None,
     axes: list[str] | None = None,
     percents: list[float] | None = None,
+    object_names: list[str] | None = None,
 ) -> Any:
     """Grid of cross-sections at multiple positions along one or more axes. The only way to verify complex internal geometry (knuckle interleave, pin holes, socket bores).
 
     Default: all 3 axes × [10, 30, 50, 70, 90]%. X-axis slices are usually most informative for hinges.
+    object_names: cut multiple objects with the same planes and render each tile with all of them. Use for chain joints / mating-part captivity verification.
     """
     if axes is None:
         axes = ['x', 'y', 'z']
     if percents is None:
         percents = [10, 30, 50, 70, 90]
 
-    result = blender.send("cross_section_gallery", {
-        "object_name": object_name, "axes": axes, "percents": percents,
-    })
+    payload = {"axes": axes, "percents": percents}
+    if object_names:
+        payload["object_names"] = object_names
+    elif object_name:
+        payload["object_name"] = object_name
+    else:
+        raise ValueError("Provide either object_name or object_names")
+    result = blender.send("cross_section_gallery", payload)
     cols = len(percents)
     composite = _tile_images(result['renders'], columns=cols, tile_w=300, tile_h=300)
     text = f"Cross-section gallery: {len(result['renders'])} slices across axes {axes}"
