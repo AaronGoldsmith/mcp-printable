@@ -374,19 +374,24 @@ def handle_cross_section(params):
     cutter = bpy.context.active_object
     cutter.name = "_claude_cutter_tmp"
 
-    # Size the cutter to encompass the object, positioned to cut one half
-    extent = (max_val - min_val) + 10
-    half = extent / 2
-    cutter.scale = [extent if i != axis_idx else half for i in range(3)]
-    loc = [0, 0, 0]
-    loc[axis_idx] = cut_pos + half
-    cutter.location = Vector(loc)
-    # Center the cutter on the other axes at the object center
-    center = (Vector([min(v[i] for v in bb) for i in range(3)]) +
-              Vector([max(v[i] for v in bb) for i in range(3)])) / 2
+    # Size and place the cutter so its near face sits AT cut_pos and it
+    # extends past max_val on the cut axis, with full bbox coverage on the
+    # other two axes. Cube primitive is size=1, so world extent == scale.
+    bb_min = [min(v[i] for v in bb) for i in range(3)]
+    bb_max = [max(v[i] for v in bb) for i in range(3)]
+    buf = 10.0
+    sc = [0.0, 0.0, 0.0]
+    lc = [0.0, 0.0, 0.0]
     for i in range(3):
-        if i != axis_idx:
-            cutter.location[i] = center[i]
+        if i == axis_idx:
+            sc[i] = max((bb_max[i] - cut_pos) + buf, 0.1)
+            lc[i] = cut_pos + sc[i] / 2
+        else:
+            sc[i] = (bb_max[i] - bb_min[i]) + buf
+            lc[i] = (bb_max[i] + bb_min[i]) / 2
+    cutter.scale = sc
+    cutter.location = Vector(lc)
+    center = (Vector(bb_min) + Vector(bb_max)) / 2
 
     bpy.context.view_layer.update()
 
