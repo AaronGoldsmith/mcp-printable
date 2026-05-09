@@ -118,14 +118,14 @@ def _ensure_scene_lighting():
         # Add a sun lamp
         bpy.ops.object.light_add(type='SUN', location=(0, 0, 10))
         sun = bpy.context.active_object
-        sun.name = "_claude_sun"
+        sun.name = "_agent_sun"
         sun.data.energy = 3.0
         sun.data.angle = 0.5  # Soft shadows
 
     # Ensure world has ambient light
     world = bpy.context.scene.world
     if world is None:
-        world = bpy.data.worlds.new("_claude_world")
+        world = bpy.data.worlds.new("_agent_world")
         bpy.context.scene.world = world
     if world.use_nodes:
         bg = world.node_tree.nodes.get("Background")
@@ -390,7 +390,7 @@ def handle_cross_section(params):
     # full union extent on the other two axes.
     bpy.ops.mesh.primitive_cube_add(size=1)
     cutter = bpy.context.active_object
-    cutter.name = "_claude_cutter_tmp"
+    cutter.name = "_agent_cutter_tmp"
     buf = 10.0
     sc = [0.0, 0.0, 0.0]
     lc = [0.0, 0.0, 0.0]
@@ -415,7 +415,7 @@ def handle_cross_section(params):
         bpy.context.view_layer.objects.active = src
         bpy.ops.object.duplicate()
         d = bpy.context.active_object
-        d.name = f"_claude_cross_section_tmp_{src.name}"
+        d.name = f"_agent_cross_section_tmp_{src.name}"
         bool_mod = d.modifiers.new(name="CrossSection", type='BOOLEAN')
         bool_mod.operation = 'DIFFERENCE'
         bool_mod.object = cutter
@@ -425,7 +425,7 @@ def handle_cross_section(params):
         dups.append(d)
 
     # Hide each input, the cutter, and every other scene mesh so only the
-    # `_claude_`-prefixed dups appear in the render.
+    # `_agent_`-prefixed dups appear in the render.
     for o in objs:
         o.hide_render = True
     cutter.hide_render = True
@@ -458,10 +458,10 @@ def handle_cross_section(params):
 
     # Camera-aligned fill so cut faces with horizontal normals (X/Y cuts)
     # are well-lit regardless of cut axis.
-    fill_data = bpy.data.lights.new("_claude_xs_fill", type='SUN')
+    fill_data = bpy.data.lights.new("_agent_xs_fill", type='SUN')
     fill_data.energy = 1.0
     fill_data.angle = math.radians(15)
-    fill = bpy.data.objects.new("_claude_xs_fill", fill_data)
+    fill = bpy.data.objects.new("_agent_xs_fill", fill_data)
     bpy.context.collection.objects.link(fill)
     fill.location = cam.location
     direction = target - fill.location
@@ -576,7 +576,7 @@ def handle_render_printability_heatmap(params):
 
 def _ensure_vertex_color_material(obj, layer_name):
     """Create a temporary material that displays vertex colors."""
-    mat = bpy.data.materials.new(name="_claude_vcol_tmp")
+    mat = bpy.data.materials.new(name="_agent_vcol_tmp")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
@@ -593,7 +593,7 @@ def _ensure_vertex_color_material(obj, layer_name):
     links.new(emission.outputs['Emission'], output.inputs['Surface'])
 
     # Store original materials and replace
-    obj['_claude_orig_materials'] = [
+    obj['_agent_orig_materials'] = [
         m.name if m else '' for m in obj.data.materials
     ]
     obj.data.materials.clear()
@@ -603,18 +603,21 @@ def _ensure_vertex_color_material(obj, layer_name):
 def _remove_vertex_color_material(obj):
     """Restore original materials after heatmap render."""
     # Remove temp material
-    if obj.data.materials and obj.data.materials[0] and obj.data.materials[0].name == "_claude_vcol_tmp":
+    if obj.data.materials and obj.data.materials[0] and obj.data.materials[0].name in ("_agent_vcol_tmp", "_claude_vcol_tmp"):
         mat = obj.data.materials[0]
         obj.data.materials.clear()
         bpy.data.materials.remove(mat)
 
     # Restore originals
-    orig_names = obj.get('_claude_orig_materials', [])
+    orig_names = obj.get('_agent_orig_materials', obj.get('_claude_orig_materials', []))
     for name in orig_names:
         if name:
             mat = bpy.data.materials.get(name)
             if mat:
                 obj.data.materials.append(mat)
+
+    if '_agent_orig_materials' in obj:
+        del obj['_agent_orig_materials']
     if '_claude_orig_materials' in obj:
         del obj['_claude_orig_materials']
 
@@ -1054,7 +1057,7 @@ def handle_export_stl(params):
     else:
         # Export ALL mesh objects as one STL
         for o in bpy.context.scene.objects:
-            if o.type == 'MESH' and not o.name.startswith("_claude_"):
+            if o.type == 'MESH' and not o.name.startswith("_agent_") and not o.name.startswith("_claude_"):
                 o.select_set(True)
                 selected.append(o)
         if selected:
@@ -1165,11 +1168,11 @@ def handle_boolean(params):
                 target.modifiers.remove(mod)
 
     # Add and apply the new boolean
-    mod = target.modifiers.new("_claude_bool", 'BOOLEAN')
+    mod = target.modifiers.new("_agent_bool", 'BOOLEAN')
     mod.operation = operation
     mod.object = cutter
     mod.solver = solver
-    bpy.ops.object.modifier_apply(modifier="_claude_bool")
+    bpy.ops.object.modifier_apply(modifier="_agent_bool")
 
     if not keep_cutter:
         cutter_mesh = cutter.data

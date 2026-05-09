@@ -119,7 +119,7 @@ def isolate_objects(names):
     """Hide all objects except those in names. Returns list of objects that were hidden."""
     hidden = []
     for obj in bpy.context.scene.objects:
-        if obj.name not in names and not obj.name.startswith("_claude_"):
+        if obj.name not in names and not obj.name.startswith("_agent_") and not obj.name.startswith("_claude_"):
             if obj.visible_get():
                 obj.hide_render = True
                 hidden.append(obj)
@@ -171,9 +171,9 @@ def setup_render_camera(elevation_deg, azimuth_deg, target=None, distance=None):
     y = -distance * math.cos(elev) * math.cos(azim)
     z = distance * math.sin(elev)
 
-    cam_data = bpy.data.cameras.new("_claude_tmp_cam")
+    cam_data = bpy.data.cameras.new("_agent_tmp_cam")
     cam_data.lens = 50
-    cam_obj = bpy.data.objects.new("_claude_tmp_cam", cam_data)
+    cam_obj = bpy.data.objects.new("_agent_tmp_cam", cam_data)
     bpy.context.collection.objects.link(cam_obj)
 
     cam_obj.location = target + Vector((x, y, z))
