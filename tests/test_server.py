@@ -21,7 +21,7 @@ class TestToolRegistration:
         """All tools should be registered (Blender + OpenSCAD backends)."""
         names = self._get_tool_names()
         expected = sorted([
-            # Blender backend (25)
+            # Blender backend (22)
             "blender_get_scene_info",
             "blender_get_object_info",
             "blender_clear_scene",
@@ -36,14 +36,11 @@ class TestToolRegistration:
             "blender_render_turntable",
             "blender_render_with_dimensions",
             "blender_render_before_after",
-            "blender_mesh_health",
             "blender_check_intersection",
             "blender_check_retention",
-            "blender_check_overhangs",
-            "blender_check_thin_walls",
             "blender_check_clearance",
             "blender_check_clearance_sweep",
-            "blender_full_printability_check",
+            "blender_validate",
             "blender_export_stl",
             "blender_import_stl",
             "blender_save_blend",
@@ -82,14 +79,11 @@ class TestToolRegistration:
             "blender_cross_section_gallery",
             "blender_render_turntable",
             "blender_render_with_dimensions",
-            "blender_mesh_health",
             "blender_check_intersection",
             "blender_check_retention",
-            "blender_check_overhangs",
-            "blender_check_thin_walls",
             "blender_check_clearance",
             "blender_check_clearance_sweep",
-            "blender_full_printability_check",
+            "blender_validate",
         ]
         tools = mcp._tool_manager._tools
         for name in read_only_tools:
@@ -141,15 +135,16 @@ class TestToolSchemas:
         assert "code" in schema.get("properties", {}), "execute_code missing 'code' param"
         assert "code" in schema.get("required", []), "execute_code 'code' should be required"
 
-    def test_check_overhangs_has_defaults(self):
+    def test_validate_has_defaults(self):
         tools = mcp._tool_manager._tools
-        tool = tools["blender_check_overhangs"]
+        tool = tools["blender_validate"]
         schema = tool.parameters
         props = schema.get("properties", {})
         assert "object_name" in props
-        assert "angle_threshold" in props
-        # angle_threshold should have a default
-        assert "default" in props["angle_threshold"], "angle_threshold should have default=45.0"
+        assert "overhang_angle" in props
+        # overhang_angle should have a default
+        assert props["overhang_angle"].get("default") == 45.0, "overhang_angle should have default=45.0"
+        assert props["min_wall_mm"].get("default") == 0.8, "min_wall_mm should have default=0.8"
 
     def test_cross_section_has_axis_param(self):
         tools = mcp._tool_manager._tools
