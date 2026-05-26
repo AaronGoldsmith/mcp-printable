@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -27,19 +26,23 @@ ADDON_INIT = REPO_ROOT / "addon" / "__init__.py"
 _VERSION_TUPLE_RE = re.compile(
     r'("version"\s*:\s*)\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)'
 )
+# Matches the [project] table's:  version = "0.2.0"
+# Regex rather than tomllib so this runs on Python 3.10 (requires-python =
+# ">=3.10"); tomllib is stdlib only on 3.11+.
+_PYPROJECT_VERSION_RE = re.compile(
+    r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', re.MULTILINE
+)
 
 
 def package_version() -> tuple[int, int, int]:
     """Read ``version`` from pyproject.toml as an (x, y, z) tuple."""
-    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    raw = data["project"]["version"]
-    parts = raw.split(".")
-    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+    m = _PYPROJECT_VERSION_RE.search(PYPROJECT.read_text(encoding="utf-8"))
+    if not m:
         raise ValueError(
-            f"pyproject version {raw!r} is not a plain X.Y.Z triple; "
+            f'Could not find a plain `version = "X.Y.Z"` line in {PYPROJECT}; '
             "update sync_addon_version.py if you adopt pre-release tags."
         )
-    return tuple(int(p) for p in parts)  # type: ignore[return-value]
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
 def addon_version() -> tuple[int, int, int]:
