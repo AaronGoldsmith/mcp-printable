@@ -51,17 +51,17 @@ mcp = FastMCP(
         "- Use `blender_boolean` for boolean operations. NEVER use `bpy.ops.object.join()` "
         "(creates internal faces) or raw bpy boolean modifiers in execute_code (failures "
         "are silent).\n"
-        "- 1–3 operations per `blender_execute_code`, then `blender_mesh_health` to verify "
+        "- 1–3 operations per `blender_execute_code`, then `blender_validate(checks=['HEALTH'])` to verify "
         "(watertight? face count sane? connected_components == 1?).\n"
         "- Renders show silhouettes only — use `blender_cross_section_gallery` to verify "
         "internal geometry truth.\n"
         "- For any joint/hinge, you MUST call `blender_check_clearance_sweep` before export.\n"
-        "- Run `blender_full_printability_check` on every part before `blender_export_stl`.\n\n"
+        "- Run `blender_validate(checks=['ALL'])` on every part before `blender_export_stl`.\n\n"
         "DESIGN LOOP: plan (compute coords -> print -> verify math) -> build (small steps -> "
-        "mesh_health) -> verify (renders + cross-sections) -> validate (printability + "
+        "validate) -> verify (renders + cross-sections) -> validate (printability + "
         "clearance) -> export (bundled STL).\n\n"
         "PRINTABILITY DOCTRINE — design for SUPPORT-FREE printing by default. When "
-        "`blender_full_printability_check` or `scad_validate_printability` flags overhangs, prefer "
+        "`blender_validate` or `scad_validate_printability` flags overhangs, prefer "
         "design changes over accepting supports: angle features >=45 deg from horizontal, "
         "flatten the print-bed surface (boolean a cube below the part), sink/chamfer "
         "overhangs into adjacent geometry, tilt or merge protruding features into the body. "
@@ -451,7 +451,7 @@ async def blender_execute_code(code: str) -> str:
 
     For boolean ops use `blender_boolean` instead — it's safer and validates the
     result. NEVER use `bpy.ops.object.join()` (creates internal faces). After any
-    geometry change call `blender_mesh_health` to verify watertight + manifold.
+    geometry change call `blender_validate(checks=['HEALTH'])` to verify watertight + manifold.
     """
     result = blender.send("execute_code", {"code": code})
     parts = []
@@ -697,23 +697,8 @@ async def blender_render_before_after(code: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Mesh health & intersection tools
+# Intersection & retention tools
 # ---------------------------------------------------------------------------
-
-@mcp.tool(
-    name="blender_mesh_health",
-    annotations={"readOnlyHint": True, "destructiveHint": False,
-                 "idempotentHint": True, "openWorldHint": False},
-)
-async def blender_mesh_health(object_name: str) -> str:
-    """Fast mesh health checkpoint (<10ms). MANDATORY after any geometry-modifying execute_code or boolean.
-
-    Pass criteria: is_watertight=True, non_manifold_edges=0, degenerate_faces=0,
-    dimensions_mm matches design intent. Any failure means redo the operation —
-    don't proceed to the next step on broken geometry.
-    """
-    result = blender.send("mesh_health", {"object_name": object_name})
-    return json.dumps(result, indent=2)
 
 
 @mcp.tool(
@@ -762,42 +747,6 @@ async def blender_check_retention(
 # ---------------------------------------------------------------------------
 
 @mcp.tool(
-    name="blender_check_overhangs",
-    annotations={"readOnlyHint": True, "destructiveHint": False,
-                 "idempotentHint": True, "openWorldHint": False},
-)
-async def blender_check_overhangs(
-    object_name: str, angle_threshold: float = 45.0,
-) -> str:
-    """Count overhang faces beyond `angle_threshold` from vertical. FDM struggles past 45°.
-
-    Returns face count, worst angle, and Z-height of the worst overhang.
-    """
-    result = blender.send("check_overhangs", {
-        "object_name": object_name, "angle_threshold": angle_threshold,
-    })
-    return json.dumps(result, indent=2)
-
-
-@mcp.tool(
-    name="blender_check_thin_walls",
-    annotations={"readOnlyHint": True, "destructiveHint": False,
-                 "idempotentHint": True, "openWorldHint": False},
-)
-async def blender_check_thin_walls(
-    object_name: str, min_thickness_mm: float = 0.8,
-) -> str:
-    """Find walls thinner than `min_thickness_mm` via raycast. Default 0.8mm ≈ 2× a 0.4mm nozzle.
-
-    Returns thin face count and the thinnest wall found.
-    """
-    result = blender.send("check_thin_walls", {
-        "object_name": object_name, "min_thickness_mm": min_thickness_mm,
-    })
-    return json.dumps(result, indent=2)
-
-
-@mcp.tool(
     name="blender_check_clearance",
     annotations={"readOnlyHint": True, "destructiveHint": False,
                  "idempotentHint": True, "openWorldHint": False},
@@ -837,21 +786,22 @@ async def blender_check_clearance_sweep(
 
 
 @mcp.tool(
-    name="blender_full_printability_check",
+    name="blender_validate",
     annotations={"readOnlyHint": True, "destructiveHint": False,
                  "idempotentHint": True, "openWorldHint": False},
 )
-async def blender_full_printability_check(
+async def blender_validate(
     object_name: str,
+    checks: list[str] | None = None,
     overhang_angle: float = 45.0,
     min_wall_mm: float = 0.8,
     clearance_partners: list[str] | None = None,
     min_clearance_mm: float = 0.3,
 ) -> str:
-    """Run ALL printability checks (overhangs, thin walls, mesh health, clearance). The final gate before STL export — run on every mesh object.
+    """Run specified printability checks on a mesh. Valid checks: 'ALL', 'HEALTH', 'OVERHANGS', 'THIN_WALLS', 'CLEARANCE'.
 
-    Set clearance_partners to also check clearance against named neighbors.
-    PASS/FAIL verdict; do not export if any object FAILs.
+    Replaces individual mesh_health, overhang, and thin_wall checks. Use checks=['ALL'] to run the full printability suite before STL export.
+    Set clearance_partners to check clearance against named neighbors.
     """
     params = {
         "object_name": object_name,
@@ -859,9 +809,11 @@ async def blender_full_printability_check(
         "min_wall_mm": min_wall_mm,
         "min_clearance_mm": min_clearance_mm,
     }
+    if checks:
+        params["checks"] = checks
     if clearance_partners:
         params["clearance_partners"] = clearance_partners
-    result = blender.send("full_printability_check", params)
+    result = blender.send("validate", params)
     return json.dumps(result, indent=2)
 
 

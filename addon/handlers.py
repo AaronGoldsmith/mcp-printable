@@ -118,14 +118,14 @@ def _ensure_scene_lighting():
         # Add a sun lamp
         bpy.ops.object.light_add(type='SUN', location=(0, 0, 10))
         sun = bpy.context.active_object
-        sun.name = "_claude_sun"
+        sun.name = "_agent_sun"
         sun.data.energy = 3.0
         sun.data.angle = 0.5  # Soft shadows
 
     # Ensure world has ambient light
     world = bpy.context.scene.world
     if world is None:
-        world = bpy.data.worlds.new("_claude_world")
+        world = bpy.data.worlds.new("_agent_world")
         bpy.context.scene.world = world
     if world.use_nodes:
         bg = world.node_tree.nodes.get("Background")
@@ -390,7 +390,7 @@ def handle_cross_section(params):
     # full union extent on the other two axes.
     bpy.ops.mesh.primitive_cube_add(size=1)
     cutter = bpy.context.active_object
-    cutter.name = "_claude_cutter_tmp"
+    cutter.name = "_agent_cutter_tmp"
     buf = 10.0
     sc = [0.0, 0.0, 0.0]
     lc = [0.0, 0.0, 0.0]
@@ -415,7 +415,7 @@ def handle_cross_section(params):
         bpy.context.view_layer.objects.active = src
         bpy.ops.object.duplicate()
         d = bpy.context.active_object
-        d.name = f"_claude_cross_section_tmp_{src.name}"
+        d.name = f"_agent_cross_section_tmp_{src.name}"
         bool_mod = d.modifiers.new(name="CrossSection", type='BOOLEAN')
         bool_mod.operation = 'DIFFERENCE'
         bool_mod.object = cutter
@@ -425,7 +425,7 @@ def handle_cross_section(params):
         dups.append(d)
 
     # Hide each input, the cutter, and every other scene mesh so only the
-    # `_claude_`-prefixed dups appear in the render.
+    # `_agent_`-prefixed dups appear in the render.
     for o in objs:
         o.hide_render = True
     cutter.hide_render = True
@@ -458,10 +458,10 @@ def handle_cross_section(params):
 
     # Camera-aligned fill so cut faces with horizontal normals (X/Y cuts)
     # are well-lit regardless of cut axis.
-    fill_data = bpy.data.lights.new("_claude_xs_fill", type='SUN')
+    fill_data = bpy.data.lights.new("_agent_xs_fill", type='SUN')
     fill_data.energy = 1.0
     fill_data.angle = math.radians(15)
-    fill = bpy.data.objects.new("_claude_xs_fill", fill_data)
+    fill = bpy.data.objects.new("_agent_xs_fill", fill_data)
     bpy.context.collection.objects.link(fill)
     fill.location = cam.location
     direction = target - fill.location
@@ -576,7 +576,7 @@ def handle_render_printability_heatmap(params):
 
 def _ensure_vertex_color_material(obj, layer_name):
     """Create a temporary material that displays vertex colors."""
-    mat = bpy.data.materials.new(name="_claude_vcol_tmp")
+    mat = bpy.data.materials.new(name="_agent_vcol_tmp")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
@@ -593,7 +593,7 @@ def _ensure_vertex_color_material(obj, layer_name):
     links.new(emission.outputs['Emission'], output.inputs['Surface'])
 
     # Store original materials and replace
-    obj['_claude_orig_materials'] = [
+    obj['_agent_orig_materials'] = [
         m.name if m else '' for m in obj.data.materials
     ]
     obj.data.materials.clear()
@@ -603,18 +603,21 @@ def _ensure_vertex_color_material(obj, layer_name):
 def _remove_vertex_color_material(obj):
     """Restore original materials after heatmap render."""
     # Remove temp material
-    if obj.data.materials and obj.data.materials[0] and obj.data.materials[0].name == "_claude_vcol_tmp":
+    if obj.data.materials and obj.data.materials[0] and obj.data.materials[0].name in ("_agent_vcol_tmp", "_claude_vcol_tmp"):
         mat = obj.data.materials[0]
         obj.data.materials.clear()
         bpy.data.materials.remove(mat)
 
     # Restore originals
-    orig_names = obj.get('_claude_orig_materials', [])
+    orig_names = obj.get('_agent_orig_materials', obj.get('_claude_orig_materials', []))
     for name in orig_names:
         if name:
             mat = bpy.data.materials.get(name)
             if mat:
                 obj.data.materials.append(mat)
+
+    if '_agent_orig_materials' in obj:
+        del obj['_agent_orig_materials']
     if '_claude_orig_materials' in obj:
         del obj['_claude_orig_materials']
 
@@ -733,19 +736,6 @@ def _compute_overhangs(obj, angle_threshold_deg=45.0):
     }
 
 
-def handle_check_overhangs(params):
-    obj = utils.resolve_object(params['object_name'])
-    utils.require_mesh(obj)
-    angle = params.get('angle_threshold', 45.0)
-    result = _compute_overhangs(obj, angle)
-    result['summary'] = (
-        f"{result['count']} overhang faces (>{angle}deg from horizontal)"
-        + (f", worst: {result['worst_angle_from_horizontal_deg']}deg at Z={result['worst_z_mm']}mm"
-           if result['count'] > 0 else "")
-    )
-    return result
-
-
 def _compute_thin_walls(obj, min_thickness_mm=0.8):
     """Core thin wall computation via raycasting."""
     # Guard: if scene units are not mm, results will be meaningless
@@ -805,17 +795,137 @@ def _compute_thin_walls(obj, min_thickness_mm=0.8):
     return result
 
 
-def handle_check_thin_walls(params):
+def handle_validate(params):
+    """Unified validation handler for mesh health, overhangs, thin walls, and clearance."""
     obj = utils.resolve_object(params['object_name'])
     utils.require_mesh(obj)
-    min_wall = params.get('min_thickness_mm', 0.8)
-    result = _compute_thin_walls(obj, min_wall)
-    result['summary'] = (
-        f"{result['count']} thin wall faces (<{min_wall}mm)"
-        + (f", thinnest: {result['min_thickness_mm']}mm"
-           if result['count'] > 0 else "")
-    )
-    return result
+
+    checks = params.get('checks', ['ALL'])
+    if not isinstance(checks, list):
+        checks = [checks]
+    run_all = 'ALL' in checks
+
+    overhang_angle = params.get('overhang_angle', 45.0)
+    min_wall = params.get('min_wall_mm', 0.8)
+    clearance_partners = params.get('clearance_partners', [])
+    min_clearance = params.get('min_clearance_mm', 0.3)
+
+    results = {}
+
+    # 1. Mesh Health (HEALTH)
+    if run_all or 'HEALTH' in checks:
+        bm = utils.get_bmesh(obj)
+        non_manifold = sum(1 for e in bm.edges if not e.is_manifold)
+        degenerate = sum(1 for f in bm.faces if f.calc_area() < 1e-6)
+        is_watertight = non_manifold == 0
+
+        # Connected components
+        visited = set()
+        components = 0
+        bm.verts.ensure_lookup_table()
+        for v in bm.verts:
+            if v.index in visited:
+                continue
+            components += 1
+            stack = [v]
+            while stack:
+                cur = stack.pop()
+                if cur.index in visited:
+                    continue
+                visited.add(cur.index)
+                for edge in cur.link_edges:
+                    for other in edge.verts:
+                        if other.index not in visited:
+                            stack.append(other)
+
+        health = {
+            'non_manifold_edges': non_manifold,
+            'degenerate_faces': degenerate,
+            'is_watertight': is_watertight,
+            'connected_components': components,
+            'is_connected': components == 1,
+            'total_faces': len(bm.faces),
+            'total_vertices': len(bm.verts),
+        }
+
+        if is_watertight:
+            health['volume_mm3'] = round(abs(bm.calc_volume()), 2)
+
+        bm.free()
+
+        # Bounding box
+        bb = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+        dims = [max(v[i] for v in bb) - min(v[i] for v in bb) for i in range(3)]
+        health['dimensions_mm'] = [round(d, 2) for d in dims]
+
+        issues = []
+        if non_manifold > 0:
+            issues.append(f"{non_manifold} non-manifold edges")
+        if degenerate > 0:
+            issues.append(f"{degenerate} degenerate faces")
+        if components > 1:
+            issues.append(f"DISCONNECTED ({components} islands)")
+        status = "ISSUES" if issues else "OK"
+        health['summary'] = (
+            f"{obj.name}: {health['total_faces']} faces, "
+            f"{'watertight' if is_watertight else 'NOT watertight'}, "
+            f"{components} component{'s' if components > 1 else ''}, "
+            f"{dims[0]:.1f}x{dims[1]:.1f}x{dims[2]:.1f}mm [{status}]"
+        )
+        results['mesh_health'] = health
+
+    # 2. Overhangs (OVERHANGS)
+    if run_all or 'OVERHANGS' in checks:
+        oh = _compute_overhangs(obj, overhang_angle)
+        oh['summary'] = (
+            f"{oh['count']} overhang faces (>{overhang_angle}deg from horizontal)"
+            + (f", worst: {oh['worst_angle_from_horizontal_deg']}deg at Z={oh['worst_z_mm']}mm"
+               if oh['count'] > 0 else "")
+        )
+        results['overhangs'] = oh
+
+    # 3. Thin Walls (THIN_WALLS)
+    if run_all or 'THIN_WALLS' in checks:
+        tw = _compute_thin_walls(obj, min_wall)
+        tw['summary'] = (
+            f"{tw['count']} thin wall faces (<{min_wall}mm)"
+            + (f", thinnest: {tw['min_thickness_mm']}mm"
+               if tw['count'] > 0 else "")
+        )
+        results['thin_walls'] = tw
+
+    # 4. Clearance (CLEARANCE)
+    if run_all or 'CLEARANCE' in checks:
+        if clearance_partners:
+            results['clearance'] = {}
+            for partner_name in clearance_partners:
+                results['clearance'][partner_name] = handle_check_clearance({
+                    'object_a': obj.name,
+                    'object_b': partner_name,
+                    'min_clearance_mm': min_clearance,
+                })
+
+    # Overall verdict (only if ALL requested)
+    if run_all:
+        passes = (
+            results['overhangs']['count'] == 0
+            and results['thin_walls']['count'] == 0
+            and results['mesh_health']['non_manifold_edges'] == 0
+            and results['mesh_health']['degenerate_faces'] == 0
+        )
+        if 'clearance' in results:
+            passes = passes and all(c['is_ok'] for c in results['clearance'].values())
+
+        results['passes'] = passes
+        results['summary'] = (
+            f"{'PASS' if passes else 'ISSUES FOUND'}: "
+            f"{results['overhangs']['count']} overhangs, "
+            f"{results['thin_walls']['count']} thin walls, "
+            f"{results['mesh_health']['non_manifold_edges']} non-manifold edges, "
+            f"{results['mesh_health']['degenerate_faces']} degenerate faces"
+        )
+
+    return results
 
 
 def handle_check_clearance(params):
@@ -952,76 +1062,6 @@ def handle_check_clearance_sweep(params):
     }
 
 
-def handle_full_printability_check(params):
-    obj = utils.resolve_object(params['object_name'])
-    utils.require_mesh(obj)
-    overhang_angle = params.get('overhang_angle', 45.0)
-    min_wall = params.get('min_wall_mm', 0.8)
-    clearance_partners = params.get('clearance_partners', [])
-    min_clearance = params.get('min_clearance_mm', 0.3)
-
-    results = {}
-
-    # Overhangs
-    results['overhangs'] = _compute_overhangs(obj, overhang_angle)
-
-    # Thin walls
-    results['thin_walls'] = _compute_thin_walls(obj, min_wall)
-
-    # Non-manifold & degenerate
-    bm = utils.get_bmesh(obj)
-    non_manifold = sum(1 for e in bm.edges if not e.is_manifold)
-    degenerate = sum(1 for f in bm.faces if f.calc_area() < 1e-6)
-    results['mesh_health'] = {
-        'non_manifold_edges': non_manifold,
-        'degenerate_faces': degenerate,
-        'is_watertight': non_manifold == 0,
-        'total_faces': len(bm.faces),
-        'total_vertices': len(bm.verts),
-    }
-
-    # Volume (only meaningful if watertight)
-    if non_manifold == 0:
-        vol = bm.calc_volume()
-        results['mesh_health']['volume_mm3'] = round(abs(vol), 2)
-
-    bm.free()
-
-    # Clearance checks
-    if clearance_partners:
-        results['clearance'] = {}
-        for partner_name in clearance_partners:
-            partner = utils.resolve_object(partner_name)
-            results['clearance'][partner_name] = handle_check_clearance({
-                'object_a': obj.name,
-                'object_b': partner_name,
-                'min_clearance_mm': min_clearance,
-            })
-
-    # Overall pass/fail
-    passes = (
-        results['overhangs']['count'] == 0
-        and results['thin_walls']['count'] == 0
-        and non_manifold == 0
-        and degenerate == 0
-    )
-    if clearance_partners:
-        passes = passes and all(
-            c['is_ok'] for c in results['clearance'].values()
-        )
-
-    results['passes'] = passes
-    results['summary'] = (
-        f"{'PASS' if passes else 'ISSUES FOUND'}: "
-        f"{results['overhangs']['count']} overhangs, "
-        f"{results['thin_walls']['count']} thin walls, "
-        f"{non_manifold} non-manifold edges, "
-        f"{degenerate} degenerate faces"
-    )
-
-    return results
-
-
 # ---------------------------------------------------------------------------
 # Export / import handlers
 # ---------------------------------------------------------------------------
@@ -1054,7 +1094,7 @@ def handle_export_stl(params):
     else:
         # Export ALL mesh objects as one STL
         for o in bpy.context.scene.objects:
-            if o.type == 'MESH' and not o.name.startswith("_claude_"):
+            if o.type == 'MESH' and not o.name.startswith("_agent_") and not o.name.startswith("_claude_"):
                 o.select_set(True)
                 selected.append(o)
         if selected:
@@ -1165,11 +1205,11 @@ def handle_boolean(params):
                 target.modifiers.remove(mod)
 
     # Add and apply the new boolean
-    mod = target.modifiers.new("_claude_bool", 'BOOLEAN')
+    mod = target.modifiers.new("_agent_bool", 'BOOLEAN')
     mod.operation = operation
     mod.object = cutter
     mod.solver = solver
-    bpy.ops.object.modifier_apply(modifier="_claude_bool")
+    bpy.ops.object.modifier_apply(modifier="_agent_bool")
 
     if not keep_cutter:
         cutter_mesh = cutter.data
@@ -1223,82 +1263,6 @@ def handle_boolean(params):
             + (f" ⚠ {'; '.join(warnings)}" if warnings else " ✓")
         ),
     }
-
-
-# ---------------------------------------------------------------------------
-# Mesh health (lightweight checkpoint tool)
-# ---------------------------------------------------------------------------
-
-def handle_mesh_health(params):
-    """Fast mesh stats — designed to be called after each boolean as a checkpoint."""
-    obj = utils.resolve_object(params['object_name'])
-    utils.require_mesh(obj)
-
-    bm = utils.get_bmesh(obj)
-    non_manifold = sum(1 for e in bm.edges if not e.is_manifold)
-    degenerate = sum(1 for f in bm.faces if f.calc_area() < 1e-6)
-    is_watertight = non_manifold == 0
-
-    # Connected components — flood-fill via vertex adjacency
-    # Disconnected islands = boolean union on coplanar faces (zero-volume bond)
-    visited = set()
-    components = 0
-    bm.verts.ensure_lookup_table()
-    for v in bm.verts:
-        if v.index in visited:
-            continue
-        components += 1
-        stack = [v]
-        while stack:
-            cur = stack.pop()
-            if cur.index in visited:
-                continue
-            visited.add(cur.index)
-            for edge in cur.link_edges:
-                for other in edge.verts:
-                    if other.index not in visited:
-                        stack.append(other)
-
-    is_connected = components == 1
-
-    result = {
-        'name': obj.name,
-        'vertices': len(bm.verts),
-        'faces': len(bm.faces),
-        'edges': len(bm.edges),
-        'non_manifold_edges': non_manifold,
-        'degenerate_faces': degenerate,
-        'is_watertight': is_watertight,
-        'connected_components': components,
-        'is_connected': is_connected,
-    }
-
-    if is_watertight:
-        result['volume_mm3'] = round(abs(bm.calc_volume()), 2)
-
-    bm.free()
-
-    # Bounding box
-    bb = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
-    dims = [max(v[i] for v in bb) - min(v[i] for v in bb) for i in range(3)]
-    result['dimensions_mm'] = [round(d, 2) for d in dims]
-
-    issues = []
-    if non_manifold > 0:
-        issues.append(f"{non_manifold} non-manifold edges")
-    if degenerate > 0:
-        issues.append(f"{degenerate} degenerate faces")
-    if not is_connected:
-        issues.append(f"DISCONNECTED ({components} islands)")
-    status = "ISSUES" if issues else "OK"
-    result['summary'] = (
-        f"{obj.name}: {result['faces']} faces, "
-        f"{'watertight' if is_watertight else 'NOT watertight'}, "
-        f"{components} component{'s' if components > 1 else ''}, "
-        f"{dims[0]:.1f}x{dims[1]:.1f}x{dims[2]:.1f}mm [{status}]"
-    )
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1454,15 +1418,12 @@ HANDLERS = {
     'render_with_dimensions': handle_render_with_dimensions,
     'render_before_after': handle_render_before_after,
     # Print validation
-    'check_overhangs': handle_check_overhangs,
-    'check_thin_walls': handle_check_thin_walls,
     'check_clearance': handle_check_clearance,
     'check_clearance_sweep': handle_check_clearance_sweep,
-    'full_printability_check': handle_full_printability_check,
+    'validate': handle_validate,
     # Boolean operation
     'boolean': handle_boolean,
     # Mesh health & intersection
-    'mesh_health': handle_mesh_health,
     'check_intersection': handle_check_intersection,
     'check_retention': handle_check_retention,
     # Export
