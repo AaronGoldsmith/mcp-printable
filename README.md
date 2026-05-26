@@ -128,7 +128,7 @@ For Claude Code, copy a skill into `~/.claude/skills/` to make it available acro
 
 **Visual feedback** — `blender_get_screenshot`, `blender_render_tiled`, `blender_render_turntable`, `blender_cross_section`, `blender_cross_section_gallery`, `blender_render_printability_heatmap`, `blender_render_with_dimensions`, `blender_render_before_after`
 
-**Print validation** — `blender_check_overhangs`, `blender_check_thin_walls`, `blender_check_clearance`, `blender_check_clearance_sweep`, `blender_check_intersection`, `blender_check_retention`, `blender_mesh_health`, `blender_full_printability_check`
+**Print validation** — `blender_validate` (one tool for HEALTH / OVERHANGS / THIN_WALLS / CLEARANCE checks; `checks=['ALL']` runs the full suite — replaces the former `mesh_health` / `check_overhangs` / `check_thin_walls` / `full_printability_check` tools), `blender_check_clearance`, `blender_check_clearance_sweep`, `blender_check_intersection`, `blender_check_retention`
 
 **Export** — `blender_export_stl`, `blender_import_stl`, `blender_save_blend`
 
@@ -141,9 +141,9 @@ For Claude Code, copy a skill into `~/.claude/skills/` to make it available acro
 Always-on rules embedded in the MCP server's `instructions` field — every agent that connects sees them automatically. Summary:
 
 1. **Plan.** Compute coordinates and dimensions in one `execute_code` call that PRINTS them. Verify the math BEFORE creating geometry.
-2. **Build.** 1–3 operations per `execute_code`, then `blender_mesh_health`.
+2. **Build.** 1–3 operations per `execute_code`, then `blender_validate(checks=['HEALTH'])`.
 3. **Verify.** Renders for shape, cross-sections for internal truth.
-4. **Validate.** `blender_check_clearance_sweep` for any joint. `blender_full_printability_check` before export.
+4. **Validate.** `blender_check_clearance_sweep` for any joint. `blender_validate(checks=['ALL'])` before export.
 5. **Export.** `blender_export_stl` (no args = bundle all parts).
 
 Full doc: [`docs/blender/design-loop.md`](docs/blender/design-loop.md).

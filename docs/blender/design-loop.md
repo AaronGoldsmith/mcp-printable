@@ -10,7 +10,7 @@ PLAN     → compute all coordinates, dimensions, and key positions in one
            geometry.
 
 BUILD    → 1–3 operations per execute_code. After each boolean, call
-           blender_mesh_health (watertight? face count sane? connected?).
+           blender_validate(checks=['HEALTH']) (watertight? face count sane? connected?).
 
 VERIFY   → blender_render_tiled after each major step. focus_object/zoom for
            parts. blender_render_turntable for cylindrical features.
@@ -18,7 +18,7 @@ VERIFY   → blender_render_tiled after each major step. focus_object/zoom for
 
 VALIDATE → blender_check_intersection for parts that shouldn't overlap.
            blender_check_clearance_sweep for any joint or hinge.
-           blender_full_printability_check on every part before export.
+           blender_validate(checks=['ALL']) on every part before export.
 
 EXPORT   → blender_export_stl with no object args to bundle all parts into
            a single STL.
@@ -55,10 +55,10 @@ Prefer self-supporting geometry (chamfers, 45° ramps) over added supports — s
 ## Common failure modes
 
 ### Monolithic execute_code
-Agents that write 40+ lines of bpy in one `execute_code` call then check the result are unreliable. Booleans fail silently. The fix is the build phase rule: one operation per call, `blender_mesh_health` after each.
+Agents that write 40+ lines of bpy in one `execute_code` call then check the result are unreliable. Booleans fail silently. The fix is the build phase rule: one operation per call, `blender_validate(checks=['HEALTH'])` after each.
 
 ### Unit-scale bug
-Default Blender scene has `scale_length=1.0` (meters). Agent builds at this scale → mesh_health says watertight=true, 0 non-manifold, but `volume_mm3=0.0`. Always start with `blender_clear_scene` (auto-sets mm) and verify `units.is_mm` in `get_scene_info`.
+Default Blender scene has `scale_length=1.0` (meters). Agent builds at this scale → the HEALTH check says watertight=true, 0 non-manifold, but `volume_mm3=0.0`. Always start with `blender_clear_scene` (auto-sets mm) and verify `units.is_mm` in `get_scene_info`.
 
 ### Render camera black-out
 - `focus_object + zoom > 1.5` can put the camera inside the object → black render.

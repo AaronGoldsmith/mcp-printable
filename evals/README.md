@@ -22,7 +22,7 @@ Things that require interpreting the geometry. The judge gets the policy text, t
 
 > "Every moving part has a continuous, uninterrupted print path from the build plate to itself, not passing through the static part it moves against."
 
-Some outcome-flavored policies can be reduced to deterministic checks via the MCP's existing validators (`blender_check_overhangs`, `blender_full_printability_check`). Prefer that — cheaper, more reliable.
+Some outcome-flavored policies can be reduced to deterministic checks via the MCP's existing validators (`blender_validate` with `checks=['OVERHANGS']` or `['ALL']`). Prefer that — cheaper, more reliable.
 
 ## Layout
 

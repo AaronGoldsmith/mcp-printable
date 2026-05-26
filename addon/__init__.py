@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Printable Blender Bridge",
     "author": "Printable",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (3, 6, 0),
     "location": "Preferences > Add-ons",
     "description": "TCP server that lets any MCP-capable AI agent control Blender for 3D-print modeling",
