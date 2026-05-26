@@ -45,6 +45,7 @@ Cutting a release:
 
 1. On a branch, bump `version = "X.Y.Z"` in `pyproject.toml`.
 1b. Sync the Blender addon's `bl_info["version"]` to match: `python scripts/sync_addon_version.py`. The addon ships as bare `.py` files inside Blender's Python (no package metadata at runtime), so this tuple must be bumped by hand or it drifts. `tests/test_version_sync.py` fails the suite if you forget — run `python scripts/sync_addon_version.py --check` to verify.
+1c. Update `CHANGELOG.md`: rename the `[Unreleased]` heading to the new `[X.Y.Z] — YYYY-MM-DD`, add a fresh empty `[Unreleased]` above it, and add a `compare` link at the bottom.
 2. PR → squash-merge to `main`.
 3. From `main`: tag with annotated message via heredoc (NOT inline `-m "...`backticks`..."` — bash interprets backticks in double-quoted strings as command substitution and eats the names):
    ```bash

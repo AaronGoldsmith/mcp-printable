@@ -5,6 +5,14 @@ on:
   push: {}
   workflow_dispatch: {}
 
+# Force the pinned Node20 actions onto the Node24 runtime ahead of GitHub's
+# 2026-06-02 default switch (Node20 is removed from runners 2026-09-16). This is
+# GitHub's documented opt-in and avoids guessing action major bumps that could
+# break the publish pipeline. Once the actions are bumped to Node24-native
+# majors (or after the default switch lands), this env block can be removed.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
