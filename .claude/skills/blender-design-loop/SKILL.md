@@ -8,6 +8,6 @@ This skill is a Claude-specific shim. The full, agent-agnostic guidance is in [`
 Always-on rules (also in the MCP server's `instructions` field):
 - Start with `blender_clear_scene` — auto-sets units to mm
 - Use `blender_boolean`, never `bpy.ops.object.join()` or raw boolean modifiers in execute_code
-- 1–3 operations per `execute_code` then `blender_mesh_health`
+- 1–3 operations per `execute_code` then `blender_validate(checks=['HEALTH'])`
 - Renders show silhouettes only — use `cross_section_gallery` for internal truth
 - `clearance_sweep` is mandatory for any joint or hinge

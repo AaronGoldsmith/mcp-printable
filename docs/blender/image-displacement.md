@@ -63,7 +63,7 @@ Tune defaults for the dominant character, override the minority.
 
 - Render **clay view** (flat matcap, no color) from front/right elevations. Side silhouette should read the pattern's character (flat for plateaus, rolling for organic) — not a uniform forest of spikes.
 - Render top view to verify the pattern is legible.
-- For print: verify the bottom face is flat. `blender_check_overhangs` should find no faces below the build plate; the lowest verts should still be at the original base Z.
+- For print: verify the bottom face is flat. `blender_validate(checks=['OVERHANGS'])` should find no faces below the build plate; the lowest verts should still be at the original base Z.
 
 ## Why these rules (lessons from real batches)
 

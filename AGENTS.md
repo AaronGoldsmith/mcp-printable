@@ -25,10 +25,10 @@ These are also embedded in the MCP `instructions` field, but if your agent doesn
 ### Blender
 - Start every modeling task with `blender_clear_scene` — it auto-sets units to mm. Building at the default 1m scale produces zero-volume meshes that pass watertight checks but are useless.
 - Use `blender_boolean` for boolean operations. **Never** use `bpy.ops.object.join()` (creates internal faces) or raw `bpy` boolean modifiers in `execute_code` (failures are silent).
-- 1–3 operations per `blender_execute_code`, then `blender_mesh_health` to verify (watertight? face count sane? `connected_components == 1`?).
+- 1–3 operations per `blender_execute_code`, then `blender_validate(checks=['HEALTH'])` to verify (watertight? face count sane? `connected_components == 1`?).
 - Renders show silhouettes only — use `blender_cross_section_gallery` to verify internal geometry truth.
 - For any joint/hinge, you **must** call `blender_check_clearance_sweep` before export.
-- Run `blender_full_printability_check` on every part before `blender_export_stl`.
+- Run `blender_validate(checks=['ALL'])` on every part before `blender_export_stl`.
 
 ### OpenSCAD
 - Use `$fn=24` during iterative design, raise to `60+` for final export.
