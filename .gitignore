@@ -35,12 +35,12 @@ evals/results/logs/
 # Drop one-off STLs / blends / scad / textures here.
 experiments/
 
-# Stray model artifacts at repo root (agents sometimes write here).
-# Subdirectories are unaffected — only catches accidental root pollution.
-/*.stl
-/*.blend
-/*.scad
+# Stray model artifacts at any level (agents sometimes write here).
+/**/*.stl
+/**/*.blend
+/**/*.scad
 
+scratch/**/*
 outputs/
 exports/
 collab/
