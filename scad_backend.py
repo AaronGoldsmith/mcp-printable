@@ -16,6 +16,7 @@ import base64
 import io
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -199,12 +200,17 @@ def cross_section(code: str, axis: str = "z", percent: float = 50.0,
     if axis not in ("x", "y", "z"):
         raise ValueError("axis must be 'x', 'y', or 'z'")
 
-    # Strategy: wrap user code in a module, compute the bbox at runtime is
-    # hard from a shell; instead we use a giant slab and rely on viewall to
-    # frame it. The slab is positioned at `percent` of a presumed-bounding box
-    # range [-100, 100]mm — works for typical printable parts (<200mm).
-    # Agents can override slab_thickness; agents needing precise positioning
-    # should compile to STL first and use trimesh slicing instead.
+    # Strategy: computing the bbox at runtime is hard from a shell; instead we
+    # use a giant slab and rely on viewall to frame it. The slab is positioned
+    # at `percent` of a presumed-bounding box range [-100, 100]mm — works for
+    # typical printable parts (<200mm). Agents can override slab_thickness;
+    # agents needing precise positioning should compile to STL first and use
+    # trimesh slicing instead.
+    #
+    # The user code goes inside a `module` body, NOT a bare block: module /
+    # function / let definitions are legal at module scope but a parser error
+    # inside `intersection() { ... }` (issue #10). `use`/`include` statements
+    # are only legal at file scope, so they're hoisted out first.
 
     box = 1000.0
     half = box / 2.0
@@ -221,16 +227,43 @@ def cross_section(code: str, axis: str = "z", percent: float = 50.0,
         translate = f"[{offset:.3f}, 0, 0]"
         scale = f"[{slab_thickness}, {box}, {box}]"
 
+    hoisted, body = _hoist_file_scope_statements(code)
     wrapped = (
+        (("\n".join(hoisted) + "\n") if hoisted else "")
+        + "// ---- user model (module scope allows module/function/let defs) ----\n"
+        f"module __printable_user_model__() {{\n{body}\n}}\n"
         "intersection() {\n"
-        "  // ---- user model ----\n"
-        f"  {{\n{code}\n  }}\n"
+        "  __printable_user_model__();\n"
         "  // ---- slab ----\n"
         f"  translate({translate}) cube({scale}, center=true);\n"
         "}\n"
     )
-    return render_view(wrapped, view=view, size=size, preview=True,
-                        timeout=timeout)
+    try:
+        return render_view(wrapped, view=view, size=size, preview=True,
+                           timeout=timeout)
+    except RuntimeError as exc:
+        # Temp-file line numbers in OpenSCAD errors don't map to user input —
+        # echo the wrapped source with line numbers so the failure is debuggable.
+        raise RuntimeError(
+            f"{exc}\n\nWrapped source as compiled (error line numbers refer "
+            f"to this):\n{_numbered_source(wrapped)}"
+        ) from exc
+
+
+_FILE_SCOPE_RE = re.compile(r"^\s*(use|include)\s*<[^>]*>\s*;?\s*$")
+
+
+def _hoist_file_scope_statements(code: str) -> tuple[list[str], str]:
+    """Split out `use <>` / `include <>` lines, which are only legal at file scope."""
+    hoisted, body = [], []
+    for line in code.splitlines():
+        (hoisted if _FILE_SCOPE_RE.match(line) else body).append(line)
+    return hoisted, "\n".join(body)
+
+
+def _numbered_source(code: str) -> str:
+    return "\n".join(f"{i:4d} | {line}"
+                     for i, line in enumerate(code.splitlines(), start=1))
 
 
 # ---------------------------------------------------------------------------

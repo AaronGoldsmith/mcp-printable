@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`scad_cross_section` now accepts `module`/`function`/`let` definitions** —
+  user code is wrapped in a top-level module (where definitions are legal)
+  instead of a bare `intersection()` block, and `use <>`/`include <>` lines are
+  hoisted to file scope. On render failure the error now echoes the wrapped
+  source with line numbers. (#10)
+- **`blender_boolean` reports `ok: false` when the result has 0 faces** with a
+  `DEGENERATE RESULT` warning, instead of silently returning success after
+  annihilating the mesh. Non-manifold warnings now include sample edge midpoint
+  coordinates, and using the same object as target and cutter is rejected with
+  a clear error. (#11)
+- **`blender_validate` output no longer exceeds MCP token limits on dense
+  meshes** — per-face issue lists (`overhangs.face_indices`, `thin_walls.faces`)
+  are capped at 10 exemplars (thin walls keep the thinnest ones) unless the new
+  `verbose=True` parameter is passed. (#12)
+- **Overhang detection math corrected** (#12): the threshold comparison used
+  `sin` where the geometry requires `cos` (coincidentally correct only at the
+  default 45°), and the reported "worst angle" was the normal's angle rather
+  than the surface's — a near-flat ceiling reported as `89.7deg from
+  horizontal`, making vertical walls appear flagged. Worst angle now reports
+  the surface angle from horizontal (0 = flat ceiling = worst) and summaries
+  read `downward, <Ndeg from horizontal`.
+- `blender_validate` HEALTH no longer reports a 0-face mesh as watertight/OK —
+  empty meshes are flagged `EMPTY MESH` and fail the `ALL` verdict.
+
 ## [0.2.0] — 2026-05-26
 
 ### Changed
