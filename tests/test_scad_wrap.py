@@ -1,90 +1,98 @@
-"""Tests for the scad_cross_section code-wrapping strategy (issue #10).
+"""Tests for scad_cross_section's compile-first slab placement.
 
-User code containing module/function/let definitions must survive the
-slab-intersection wrap. These tests exercise the wrapping logic without
-invoking the OpenSCAD binary.
+The cross-section compiles user code to STL (so module/function/let
+definitions are legal — issue #10), reads the real bounding box with trimesh,
+and places the slab at percent of the actual extent (previously percent mapped
+onto a fixed ±500mm presumed box, silently missing normal-sized parts).
+
+These tests exercise the wrapping/positioning logic without invoking the
+OpenSCAD binary.
 """
 
+import numpy as np
 import pytest
+import trimesh
 
 import scad_backend
-from scad_backend import _hoist_file_scope_statements, _numbered_source
+from scad_backend import CompileResult, _numbered_source
 
 
-class TestHoisting:
-    def test_plain_code_unchanged(self):
-        hoisted, body = _hoist_file_scope_statements("cube([5,5,5]);")
-        assert hoisted == []
-        assert body == "cube([5,5,5]);"
-
-    def test_use_and_include_hoisted(self):
-        code = "use <MCAD/gears.scad>\ninclude <helpers.scad>;\ncube(5);"
-        hoisted, body = _hoist_file_scope_statements(code)
-        assert hoisted == ["use <MCAD/gears.scad>", "include <helpers.scad>;"]
-        assert body == "cube(5);"
-
-    def test_module_definitions_stay_in_body(self):
-        code = "module foo() { cube(5); }\nfoo();"
-        hoisted, body = _hoist_file_scope_statements(code)
-        assert hoisted == []
-        assert body == code
+class _FakeMesh:
+    """Stands in for a trimesh mesh: 20mm cube spanning [-10, 10]^3."""
+    bounds = np.array([[-10.0, -10.0, -10.0], [10.0, 10.0, 10.0]])
+    faces = [0] * 12
+    is_empty = False
 
 
-class TestWrappedSource:
-    """Verify the generated wrapper puts user code at module scope."""
+@pytest.fixture
+def capture(monkeypatch):
+    """Stub compile/trimesh/render; return dict capturing the wrapper source."""
+    captured = {}
+    monkeypatch.setattr(
+        scad_backend, "compile_to_stl",
+        lambda code, timeout=120: CompileResult(ok=True, stl_path=r"C:\tmp\fake.stl"),
+    )
+    monkeypatch.setattr(trimesh, "load", lambda path, force=None: _FakeMesh())
 
-    def _capture_wrapped(self, code, **kwargs):
-        captured = {}
+    def fake_render_view(src, **kw):
+        captured["src"] = src
+        return b"png"
 
-        def fake_render_view(src, **kw):
-            captured["src"] = src
-            return b"png"
+    monkeypatch.setattr(scad_backend, "render_view", fake_render_view)
+    return captured
 
-        orig = scad_backend.render_view
-        scad_backend.render_view = fake_render_view
-        try:
-            scad_backend.cross_section(code, **kwargs)
-        finally:
-            scad_backend.render_view = orig
-        return captured["src"]
 
-    def test_user_code_inside_module_body(self):
-        src = self._capture_wrapped("module hex(d) { cylinder(d=d); }\nhex(8);")
-        assert "module __printable_user_model__() {" in src
-        assert "module hex(d)" in src
-        assert "__printable_user_model__();" in src
-        # Definitions must come before the intersection block
-        assert src.index("module hex(d)") < src.index("intersection()")
+class TestSlabPlacement:
+    def test_percent_maps_onto_real_bounds(self, capture):
+        _, info = scad_backend.cross_section("cube(20, center=true);",
+                                             axis="z", percent=25)
+        # 25% of [-10, 10] = -5.0, NOT -250 of a presumed 1000mm box
+        assert info["position_mm"] == -5.0
+        assert info["axis_min_mm"] == -10.0
+        assert info["axis_max_mm"] == 10.0
+        assert "-5.000" in capture["src"]
 
-    def test_includes_hoisted_to_file_scope(self):
-        src = self._capture_wrapped("use <MCAD/gears.scad>\ncube(5);")
-        assert src.index("use <MCAD/gears.scad>") < src.index("module __printable_user_model__")
+    def test_wrapper_imports_compiled_stl(self, capture):
+        scad_backend.cross_section("cube(5);")
+        assert 'import("C:/tmp/fake.stl"' in capture["src"]  # forward slashes
+        assert "intersection()" in capture["src"]
 
-    def test_slab_axis_and_percent(self):
-        src = self._capture_wrapped("cube(5);", axis="x", percent=25)
-        assert "[-250.000, 0, 0]" in src
+    def test_slab_thickness_on_chosen_axis(self, capture):
+        scad_backend.cross_section("cube(5);", axis="x", percent=50,
+                                   slab_thickness=0.7)
+        assert "[0.700, 40.000, 40.000]" in capture["src"]
 
-    def test_invalid_axis_rejected(self):
+    def test_invalid_axis_rejected(self, capture):
         with pytest.raises(ValueError):
             scad_backend.cross_section("cube(5);", axis="w")
 
 
-class TestErrorEcho:
-    def test_render_failure_includes_numbered_source(self):
-        def failing_render_view(src, **kw):
-            raise RuntimeError("Parser error: syntax error in file tmp123.scad, line 4")
-
-        orig = scad_backend.render_view
-        scad_backend.render_view = failing_render_view
-        try:
-            with pytest.raises(RuntimeError) as exc_info:
-                scad_backend.cross_section("cube([5,5,5]")
-        finally:
-            scad_backend.render_view = orig
+class TestErrors:
+    def test_compile_failure_echoes_numbered_user_source(self, monkeypatch):
+        monkeypatch.setattr(
+            scad_backend, "compile_to_stl",
+            lambda code, timeout=120: CompileResult(
+                ok=False, stderr="Parser error: syntax error, line 1"),
+        )
+        with pytest.raises(RuntimeError) as exc_info:
+            scad_backend.cross_section("cube([5,5,5]")
         msg = str(exc_info.value)
-        assert "Wrapped source as compiled" in msg
-        assert "   1 |" in msg
+        assert "Parser error" in msg
+        assert "   1 | cube([5,5,5]" in msg
+
+    def test_empty_mesh_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            scad_backend, "compile_to_stl",
+            lambda code, timeout=120: CompileResult(ok=True, stl_path="x.stl"),
+        )
+
+        class _Empty:
+            is_empty = True
+            faces = []
+
+        monkeypatch.setattr(trimesh, "load", lambda path, force=None: _Empty())
+        with pytest.raises(RuntimeError, match="empty mesh"):
+            scad_backend.cross_section("cube(0);")
 
     def test_numbered_source_format(self):
-        out = _numbered_source("a\nb")
-        assert out == "   1 | a\n   2 | b"
+        assert _numbered_source("a\nb") == "   1 | a\n   2 | b"

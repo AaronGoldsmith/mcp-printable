@@ -395,6 +395,24 @@ async def blender_clear_scene(force: bool = False) -> str:
 
 
 @mcp.tool(
+    name="blender_restore_checkpoint",
+    annotations={"readOnlyHint": False, "destructiveHint": True,
+                 "idempotentHint": True, "openWorldHint": False},
+)
+async def blender_restore_checkpoint() -> str:
+    """Restore the scene from the auto-saved checkpoint — the undo button for a destroyed mesh.
+
+    A checkpoint is saved automatically before every blender_boolean and
+    blender_execute_code call, so this rolls back to the state just before the
+    most recent mutating operation. Replaces ALL current scene objects.
+    Use immediately after a DEGENERATE RESULT warning or a botched edit —
+    a subsequent mutating call overwrites the checkpoint with the broken state.
+    """
+    result = blender.send("restore_checkpoint")
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool(
     name="blender_rename_object",
     annotations={"readOnlyHint": False, "destructiveHint": False,
                  "idempotentHint": True, "openWorldHint": False},
@@ -707,10 +725,12 @@ async def blender_render_before_after(code: str) -> Any:
                  "idempotentHint": True, "openWorldHint": False},
 )
 async def blender_check_intersection(object_a: str, object_b: str) -> str:
-    """Check if two meshes physically overlap. Use after assembly — separate parts should NEVER intersect (would mean a boolean went wrong, or parts were placed too close).
+    """Check if two meshes physically overlap. Use after assembly — separate parts should NEVER volumetrically overlap (would mean a boolean went wrong, or parts were placed too close).
 
     Distinct from clearance (which measures distance between non-touching objects).
-    Returns intersects=bool + count of overlapping face pairs.
+    Returns contact_type: NONE | SURFACE_CONTACT (coincident faces, expected for
+    flush-fit assemblies) | VOLUMETRIC_OVERLAP (parts share volume and will fuse),
+    plus overlap_volume_mm3 and the raw face-pair count.
     """
     result = blender.send("check_intersection", {
         "object_a": object_a, "object_b": object_b,
@@ -995,12 +1015,13 @@ async def scad_cross_section(code: str, axis: str = "z", percent: float = 50.0,
                                slab_thickness: float = 0.5):
     """Slice the model with a thin slab and render the cut. The only reliable way to verify internal geometry (clearances, hollows, joints).
 
-    percent: 0-100 along the chosen axis. slab_thickness in model units.
+    percent: 0-100 along the chosen axis (mapped onto the model's actual bounds). slab_thickness in model units.
+    Compiles the code to STL first, so expect CGAL render time on heavy models.
     """
     if scad_backend.find_openscad() is None:
         return _scad_unavailable_msg()
     try:
-        png_bytes = scad_backend.cross_section(
+        png_bytes, info = scad_backend.cross_section(
             code, axis=axis, percent=percent, view=view, size=size,
             slab_thickness=slab_thickness,
         )
@@ -1008,7 +1029,10 @@ async def scad_cross_section(code: str, axis: str = "z", percent: float = 50.0,
         return f"Cross-section failed: {exc}"
     b64 = base64.b64encode(png_bytes).decode("ascii")
     return _text_and_image(
-        f"Cross-section axis={axis} at {percent:.1f}%, slab {slab_thickness}mm",
+        f"Cross-section axis={axis} at {percent:.1f}% "
+        f"(position: {info['position_mm']}mm, model spans "
+        f"{info['axis_min_mm']}..{info['axis_max_mm']}mm), "
+        f"slab {slab_thickness}mm",
         b64,
     )
 

@@ -256,12 +256,15 @@ def set_vertex_colors(obj, face_colors, layer_name="PrintCheck"):
             color_layer.data[loop_idx].color = color
 
 
+def checkpoint_path():
+    """Where auto-checkpoints are written: next to the saved file, else temp."""
+    if bpy.data.filepath:
+        return bpy.data.filepath.replace('.blend', '_checkpoint.blend')
+    return os.path.join(tempfile.gettempdir(), 'printable_blender_checkpoint.blend')
+
+
 def auto_save_checkpoint():
     """Save a .blend checkpoint if the file has been saved before, or to temp."""
-    if bpy.data.filepath:
-        # Save next to the current file
-        path = bpy.data.filepath.replace('.blend', '_checkpoint.blend')
-    else:
-        path = os.path.join(tempfile.gettempdir(), 'printable_blender_checkpoint.blend')
+    path = checkpoint_path()
     bpy.ops.wm.save_as_mainfile(filepath=path, copy=True)
     return path

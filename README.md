@@ -120,9 +120,9 @@ For Claude Code, copy a skill into `~/.claude/skills/` to make it available acro
 
 ## Tool families
 
-### Blender (25 tools)
+### Blender (23 tools)
 
-**Scene** — `blender_get_scene_info`, `blender_get_object_info`, `blender_clear_scene`, `blender_rename_object`
+**Scene** — `blender_get_scene_info`, `blender_get_object_info`, `blender_clear_scene`, `blender_restore_checkpoint` (roll back to the auto-saved checkpoint after a destructive mistake), `blender_rename_object`
 
 **Code** — `blender_execute_code` (arbitrary bpy/bmesh; auto-checkpoints), `blender_boolean` (typed UNION/DIFFERENCE/INTERSECT — *prefer this over execute_code*)
 

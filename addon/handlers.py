@@ -156,6 +156,47 @@ def handle_clear_scene(params):
     return {'cleared': True, 'units': 'MILLIMETERS', 'scale_length': 0.001}
 
 
+def handle_restore_checkpoint(params):
+    """Replace the current scene objects with those from the auto-saved checkpoint.
+
+    Checkpoints are written before every boolean / execute_code call, so this
+    recovers the state just before the most recent mutating operation. Must
+    NOT checkpoint itself — that would overwrite the file being restored.
+    """
+    path = utils.checkpoint_path()
+    if not os.path.isfile(path):
+        raise ValueError(
+            f"No checkpoint found at {path}. Checkpoints are auto-saved "
+            "before boolean and execute_code operations."
+        )
+
+    # Wipe current objects (the point of restoring is to discard them).
+    for obj in list(bpy.context.scene.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
+    for mesh in bpy.data.meshes:
+        if mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
+
+    # Append every object from the checkpoint .blend. Appending (not opening
+    # the file) keeps the addon's TCP server and the user's UI state alive.
+    with bpy.data.libraries.load(path, link=False) as (data_from, data_to):
+        data_to.objects = list(data_from.objects)
+    restored = []
+    for obj in data_to.objects:
+        if obj is not None:
+            bpy.context.scene.collection.objects.link(obj)
+            restored.append(obj.name)
+
+    _ensure_mm_units()
+    _ensure_scene_lighting()
+    return {
+        'restored_objects': sorted(restored),
+        'checkpoint': path,
+        'checkpoint_mtime': os.path.getmtime(path),
+        'summary': f"Restored {len(restored)} object(s) from checkpoint",
+    }
+
+
 def handle_rename_object(params):
     obj = utils.resolve_object(params['old_name'])
     new_name = params['new_name']
@@ -1331,15 +1372,68 @@ def handle_check_intersection(params):
     bm_b.free()
 
     intersects = len(overlap_pairs) > 0
+
+    # Face-pair counts can't distinguish flush contact (coincident faces,
+    # fine for assemblies) from real penetration (parts will fuse). Compute
+    # the actual intersection volume on a throwaway copy to classify.
+    overlap_volume = 0.0
+    if intersects:
+        overlap_volume = _intersection_volume(obj_a, obj_b)
+
+    if not intersects:
+        contact = 'NONE'
+    elif overlap_volume < 0.01:  # mm^3 — below this it's numerically a surface
+        contact = 'SURFACE_CONTACT'
+    else:
+        contact = 'VOLUMETRIC_OVERLAP'
+
     return {
         'intersects': intersects,
         'overlap_face_pairs': len(overlap_pairs),
+        'overlap_volume_mm3': round(overlap_volume, 3),
+        'contact_type': contact,
         'summary': (
-            f"{obj_a.name} {'INTERSECTS' if intersects else 'does not intersect'} "
-            f"{obj_b.name}"
-            + (f" ({len(overlap_pairs)} overlapping face pairs)" if intersects else "")
+            f"{obj_a.name} / {obj_b.name}: {contact}"
+            + (f" ({len(overlap_pairs)} face pairs, {overlap_volume:.3f}mm^3 shared volume)"
+               if intersects else "")
         ),
     }
+
+
+def _intersection_volume(obj_a, obj_b):
+    """Volume of the boolean intersection of two objects, in mm^3.
+
+    Evaluated on a temp copy via the depsgraph — neither object is modified.
+    Returns 0.0 if the boolean fails (e.g. non-manifold inputs).
+    """
+    tmp = None
+    try:
+        tmp = obj_a.copy()
+        tmp.data = obj_a.data.copy()
+        tmp.name = "_agent_isect_tmp"
+        bpy.context.scene.collection.objects.link(tmp)
+        mod = tmp.modifiers.new("_agent_isect", 'BOOLEAN')
+        mod.operation = 'INTERSECT'
+        mod.object = obj_b
+        mod.solver = 'EXACT'
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        eval_obj = tmp.evaluated_get(depsgraph)
+        mesh = eval_obj.to_mesh()
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        bm.transform(tmp.matrix_world)
+        volume = abs(bm.calc_volume(signed=True))
+        bm.free()
+        eval_obj.to_mesh_clear()
+        return volume
+    except Exception:
+        return 0.0
+    finally:
+        if tmp is not None:
+            mesh_data = tmp.data
+            bpy.data.objects.remove(tmp, do_unlink=True)
+            if mesh_data.users == 0:
+                bpy.data.meshes.remove(mesh_data)
 
 
 # ---------------------------------------------------------------------------
@@ -1441,6 +1535,7 @@ HANDLERS = {
     'get_scene_info': handle_get_scene_info,
     'get_object_info': handle_get_object_info,
     'clear_scene': handle_clear_scene,
+    'restore_checkpoint': handle_restore_checkpoint,
     'rename_object': handle_rename_object,
     # Code
     'execute_code': handle_execute_code,

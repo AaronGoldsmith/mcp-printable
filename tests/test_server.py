@@ -21,10 +21,11 @@ class TestToolRegistration:
         """All tools should be registered (Blender + OpenSCAD backends)."""
         names = self._get_tool_names()
         expected = sorted([
-            # Blender backend (22)
+            # Blender backend (23)
             "blender_get_scene_info",
             "blender_get_object_info",
             "blender_clear_scene",
+            "blender_restore_checkpoint",
             "blender_rename_object",
             "blender_boolean",
             "blender_execute_code",
@@ -98,6 +99,7 @@ class TestToolRegistration:
         """Destructive tools should have destructiveHint=True."""
         destructive_tools = [
             "blender_clear_scene",
+            "blender_restore_checkpoint",
             "blender_boolean",
             "blender_execute_code",
             "blender_render_before_after",
