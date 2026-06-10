@@ -797,17 +797,20 @@ async def blender_validate(
     min_wall_mm: float = 0.8,
     clearance_partners: list[str] | None = None,
     min_clearance_mm: float = 0.3,
+    verbose: bool = False,
 ) -> str:
     """Run specified printability checks on a mesh. Valid checks: 'ALL', 'HEALTH', 'OVERHANGS', 'THIN_WALLS', 'CLEARANCE'.
 
     Replaces individual mesh_health, overhang, and thin_wall checks. Use checks=['ALL'] to run the full printability suite before STL export.
     Set clearance_partners to check clearance against named neighbors.
+    Per-face issue lists are capped at 10 exemplars; pass verbose=True for the full lists (can be very large on dense meshes).
     """
     params = {
         "object_name": object_name,
         "overhang_angle": overhang_angle,
         "min_wall_mm": min_wall_mm,
         "min_clearance_mm": min_clearance_mm,
+        "verbose": verbose,
     }
     if checks:
         params["checks"] = checks

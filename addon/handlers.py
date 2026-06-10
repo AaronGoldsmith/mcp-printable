@@ -568,7 +568,7 @@ def handle_render_printability_heatmap(params):
         'overhang_faces': overhang_data['count'],
         'thin_wall_faces': thin_wall_data['count'],
         'summary': (
-            f"{overhang_data['count']} overhang faces (>{angle_threshold}deg), "
+            f"{overhang_data['count']} overhang faces (downward, <{angle_threshold}deg from horizontal), "
             f"{thin_wall_data['count']} thin wall faces (<{min_wall}mm)"
         ),
     }
@@ -702,9 +702,12 @@ def _compute_overhangs(obj, angle_threshold_deg=45.0):
         bm = utils.get_bmesh(analysis_obj)
         bm.faces.ensure_lookup_table()
 
-        z_threshold = -math.sin(math.radians(angle_threshold_deg))
+        # A downward face tilted `theta` deg from horizontal has
+        # normal.z = -cos(theta). theta=0 -> flat ceiling (worst overhang),
+        # theta=90 -> vertical wall (always printable). Flag theta < threshold.
+        z_threshold = -math.cos(math.radians(angle_threshold_deg))
         overhangs = []
-        worst_angle = 0
+        worst_angle = 90.0
         worst_z = None
 
         for face in bm.faces:
@@ -713,11 +716,10 @@ def _compute_overhangs(obj, angle_threshold_deg=45.0):
                 center = face.calc_center_median()
                 if center.z < 0.1 and face.normal.z < -0.99:
                     continue
-                # Angle from horizontal (FDM convention: 0=flat on bed, 90=vertical wall)
-                # face.normal.z = -sin(angle_from_horizontal) for downward faces
-                angle = math.degrees(math.asin(max(-1, min(1, -face.normal.z))))
+                # Surface angle from horizontal (FDM convention: 0=flat ceiling, 90=vertical wall)
+                angle = math.degrees(math.acos(max(-1, min(1, -face.normal.z))))
                 overhangs.append(face.index)
-                if angle > worst_angle:
+                if angle < worst_angle:
                     worst_angle = angle
                     worst_z = round(center.z, 2)
 
@@ -729,7 +731,7 @@ def _compute_overhangs(obj, angle_threshold_deg=45.0):
     return {
         'count': len(overhangs),
         'face_indices': overhangs,
-        'worst_angle_from_horizontal_deg': round(worst_angle, 1),
+        'worst_angle_from_horizontal_deg': round(worst_angle, 1) if overhangs else None,
         'worst_z_mm': worst_z,
         'threshold_deg': angle_threshold_deg,
         'approximate': was_decimated,
@@ -809,6 +811,10 @@ def handle_validate(params):
     min_wall = params.get('min_wall_mm', 0.8)
     clearance_partners = params.get('clearance_partners', [])
     min_clearance = params.get('min_clearance_mm', 0.3)
+    verbose = params.get('verbose', False)
+    # Cap exemplar lists by default: full per-face dumps on realistic meshes
+    # exceed MCP tool-result token limits (issue #12).
+    max_exemplars = None if verbose else 10
 
     results = {}
 
@@ -817,7 +823,7 @@ def handle_validate(params):
         bm = utils.get_bmesh(obj)
         non_manifold = sum(1 for e in bm.edges if not e.is_manifold)
         degenerate = sum(1 for f in bm.faces if f.calc_area() < 1e-6)
-        is_watertight = non_manifold == 0
+        is_watertight = non_manifold == 0 and len(bm.faces) > 0
 
         # Connected components
         visited = set()
@@ -859,6 +865,8 @@ def handle_validate(params):
         health['dimensions_mm'] = [round(d, 2) for d in dims]
 
         issues = []
+        if health['total_faces'] == 0:
+            issues.append("EMPTY MESH (0 faces)")
         if non_manifold > 0:
             issues.append(f"{non_manifold} non-manifold edges")
         if degenerate > 0:
@@ -877,8 +885,11 @@ def handle_validate(params):
     # 2. Overhangs (OVERHANGS)
     if run_all or 'OVERHANGS' in checks:
         oh = _compute_overhangs(obj, overhang_angle)
+        if max_exemplars is not None and len(oh['face_indices']) > max_exemplars:
+            oh['face_indices'] = oh['face_indices'][:max_exemplars]
+            oh['face_indices_truncated'] = True
         oh['summary'] = (
-            f"{oh['count']} overhang faces (>{overhang_angle}deg from horizontal)"
+            f"{oh['count']} overhang faces (downward, <{overhang_angle}deg from horizontal)"
             + (f", worst: {oh['worst_angle_from_horizontal_deg']}deg at Z={oh['worst_z_mm']}mm"
                if oh['count'] > 0 else "")
         )
@@ -887,6 +898,10 @@ def handle_validate(params):
     # 3. Thin Walls (THIN_WALLS)
     if run_all or 'THIN_WALLS' in checks:
         tw = _compute_thin_walls(obj, min_wall)
+        if max_exemplars is not None and len(tw['faces']) > max_exemplars:
+            # Keep the thinnest exemplars — those are the actionable ones.
+            tw['faces'] = sorted(tw['faces'], key=lambda ft: ft[1])[:max_exemplars]
+            tw['faces_truncated'] = True
         tw['summary'] = (
             f"{tw['count']} thin wall faces (<{min_wall}mm)"
             + (f", thinnest: {tw['min_thickness_mm']}mm"
@@ -908,7 +923,8 @@ def handle_validate(params):
     # Overall verdict (only if ALL requested)
     if run_all:
         passes = (
-            results['overhangs']['count'] == 0
+            results['mesh_health']['total_faces'] > 0
+            and results['overhangs']['count'] == 0
             and results['thin_walls']['count'] == 0
             and results['mesh_health']['non_manifold_edges'] == 0
             and results['mesh_health']['degenerate_faces'] == 0
@@ -1184,6 +1200,8 @@ def handle_boolean(params):
     cutter = utils.resolve_object(cutter_name)
     utils.require_mesh(target)
     utils.require_mesh(cutter)
+    if target == cutter:
+        raise ValueError("target and cutter must be different objects")
 
     utils.auto_save_checkpoint()
 
@@ -1236,15 +1254,33 @@ def handle_boolean(params):
                 for other in edge.verts:
                     if other.index not in visited:
                         stack.append(other)
-    non_manifold = sum(1 for e in bm.edges if not e.is_manifold)
+    non_manifold = 0
+    nm_edge_samples = []
+    mw = target.matrix_world
+    for e in bm.edges:
+        if not e.is_manifold:
+            non_manifold += 1
+            if len(nm_edge_samples) < 5:
+                mid = mw @ ((e.verts[0].co + e.verts[1].co) / 2)
+                nm_edge_samples.append([round(c, 2) for c in mid])
     face_count_after = len(bm.faces)
     bm.free()
 
     warnings = []
+    if face_count_after == 0:
+        warnings.append(
+            f"DEGENERATE RESULT: {operation} produced 0 faces — the mesh was destroyed. "
+            "For INTERSECT this means the objects did not overlap. "
+            "A checkpoint was auto-saved before the operation."
+        )
     if components > 1:
         warnings.append(f"DISCONNECTED: {components} islands — boolean union on coplanar faces. Increase overlap.")
     if non_manifold > 0:
-        warnings.append(f"NON-MANIFOLD: {non_manifold} edges — boolean may have failed.")
+        warnings.append(
+            f"NON-MANIFOLD: {non_manifold} edges — boolean may have failed "
+            f"(tangent/coplanar surfaces are a common cause). "
+            f"Sample edge midpoints (mm): {nm_edge_samples}"
+        )
     if face_count_after == face_count_before and operation == 'DIFFERENCE':
         warnings.append("Face count unchanged — cutter may not have overlapped target.")
 
