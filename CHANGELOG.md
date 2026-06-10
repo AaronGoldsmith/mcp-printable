@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`blender_restore_checkpoint` tool** — rolls the scene back to the
+  auto-saved checkpoint (written before every `blender_boolean` /
+  `blender_execute_code`). Closes the recovery loop opened by the
+  `DEGENERATE RESULT` warning: a destroyed mesh is now one call from restored.
+  Restores by appending objects from the checkpoint `.blend`, so the addon's
+  TCP server and the Blender UI session survive.
+- **`blender_check_intersection` classifies contact** — new `contact_type`
+  (`NONE` | `SURFACE_CONTACT` | `VOLUMETRIC_OVERLAP`) and `overlap_volume_mm3`
+  fields, computed via a throwaway boolean intersect. Face-pair counts alone
+  could not distinguish flush-fit assemblies (coincident faces, harmless) from
+  real penetration (parts will fuse) — a long-standing false-alarm source when
+  verifying joints.
+
+### Changed
+- **`scad_cross_section` places the slab on the model's real bounding box.**
+  Previously `percent` mapped onto a fixed ±500mm presumed box, so anything
+  but ~50% silently missed a normal-sized part and rendered a blank image.
+  The code is now compiled to STL first (which also makes module/function/let
+  definitions legal at file scope, simplifying the #10 fix), the bbox is read
+  with trimesh, and the cut position plus model bounds are reported in the
+  tool output. Costs a CGAL compile per call.
+
 ## [0.2.1] — 2026-06-09
 
 ### Fixed

@@ -188,77 +188,64 @@ def render_view(code: str, view: str = "iso", size: int = 512,
 
 def cross_section(code: str, axis: str = "z", percent: float = 50.0,
                   view: str = "iso", size: int = 512,
-                  slab_thickness: float = 0.5, timeout: int = 60) -> bytes:
+                  slab_thickness: float = 0.5,
+                  timeout: int = 120) -> tuple[bytes, dict]:
     """Render a cross-section of the model by intersecting with a thin slab.
 
-    The slab is a 1000mm cube (presumed to dwarf the model) centered at the
-    chosen Z (or X/Y) plane, with thickness `slab_thickness`.
+    Returns (png_bytes, info) where info has the actual cut position and the
+    model bounds along the chosen axis.
 
-    Returns PNG bytes.
+    Strategy: compile the user code to STL first (definitions are legal at
+    file scope, so module/function/let all work — issue #10), read the real
+    bounding box with trimesh, and place the slab at exactly
+    `min + percent/100 * extent` along the axis. The old approach mapped
+    percent onto a fixed ±500mm presumed box, so any percent other than ~50
+    silently missed a normal-sized part and rendered a blank image.
     """
+    import trimesh  # lazy: the Blender-only path doesn't pay the import
+
     axis = axis.lower()
     if axis not in ("x", "y", "z"):
         raise ValueError("axis must be 'x', 'y', or 'z'")
+    axis_idx = "xyz".index(axis)
 
-    # Strategy: computing the bbox at runtime is hard from a shell; instead we
-    # use a giant slab and rely on viewall to frame it. The slab is positioned
-    # at `percent` of a presumed-bounding box range [-100, 100]mm — works for
-    # typical printable parts (<200mm). Agents can override slab_thickness;
-    # agents needing precise positioning should compile to STL first and use
-    # trimesh slicing instead.
-    #
-    # The user code goes inside a `module` body, NOT a bare block: module /
-    # function / let definitions are legal at module scope but a parser error
-    # inside `intersection() { ... }` (issue #10). `use`/`include` statements
-    # are only legal at file scope, so they're hoisted out first.
+    compiled = compile_to_stl(code, timeout=timeout)
+    if not compiled.ok:
+        raise RuntimeError(
+            f"OpenSCAD compile failed (cross-section compiles your code to "
+            f"STL first).\nstderr:\n{compiled.stderr}\n\nSource as compiled "
+            f"(error line numbers refer to this):\n{_numbered_source(code)}"
+        )
 
-    box = 1000.0
-    half = box / 2.0
-    # Map percent (0..100) onto [-half, +half] of the chosen axis.
-    offset = -half + (percent / 100.0) * box
+    mesh = trimesh.load(compiled.stl_path, force="mesh")
+    if mesh.is_empty or len(mesh.faces) == 0:
+        raise RuntimeError("Model compiled to an empty mesh — nothing to cross-section.")
+    lo, hi = mesh.bounds[0], mesh.bounds[1]
+    cut_pos = lo[axis_idx] + (percent / 100.0) * (hi[axis_idx] - lo[axis_idx])
 
-    if axis == "z":
-        translate = f"[0, 0, {offset:.3f}]"
-        scale = f"[{box}, {box}, {slab_thickness}]"
-    elif axis == "y":
-        translate = f"[0, {offset:.3f}, 0]"
-        scale = f"[{box}, {slab_thickness}, {box}]"
-    else:  # x
-        translate = f"[{offset:.3f}, 0, 0]"
-        scale = f"[{slab_thickness}, {box}, {box}]"
+    # Slab comfortably larger than the model in the other two axes.
+    pad = 2.0 * max(float(h - l) for l, h in zip(lo, hi))
+    dims = [pad, pad, pad]
+    dims[axis_idx] = slab_thickness
+    center = [(l + h) / 2.0 for l, h in zip(lo, hi)]
+    center[axis_idx] = cut_pos
 
-    hoisted, body = _hoist_file_scope_statements(code)
+    stl_for_scad = compiled.stl_path.replace("\\", "/")
     wrapped = (
-        (("\n".join(hoisted) + "\n") if hoisted else "")
-        + "// ---- user model (module scope allows module/function/let defs) ----\n"
-        f"module __printable_user_model__() {{\n{body}\n}}\n"
         "intersection() {\n"
-        "  __printable_user_model__();\n"
-        "  // ---- slab ----\n"
-        f"  translate({translate}) cube({scale}, center=true);\n"
+        f'  import("{stl_for_scad}", convexity=10);\n'
+        f"  translate([{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}])\n"
+        f"    cube([{dims[0]:.3f}, {dims[1]:.3f}, {dims[2]:.3f}], center=true);\n"
         "}\n"
     )
-    try:
-        return render_view(wrapped, view=view, size=size, preview=True,
-                           timeout=timeout)
-    except RuntimeError as exc:
-        # Temp-file line numbers in OpenSCAD errors don't map to user input —
-        # echo the wrapped source with line numbers so the failure is debuggable.
-        raise RuntimeError(
-            f"{exc}\n\nWrapped source as compiled (error line numbers refer "
-            f"to this):\n{_numbered_source(wrapped)}"
-        ) from exc
-
-
-_FILE_SCOPE_RE = re.compile(r"^\s*(use|include)\s*<[^>]*>\s*;?\s*$")
-
-
-def _hoist_file_scope_statements(code: str) -> tuple[list[str], str]:
-    """Split out `use <>` / `include <>` lines, which are only legal at file scope."""
-    hoisted, body = [], []
-    for line in code.splitlines():
-        (hoisted if _FILE_SCOPE_RE.match(line) else body).append(line)
-    return hoisted, "\n".join(body)
+    png = render_view(wrapped, view=view, size=size, preview=True,
+                      timeout=timeout)
+    info = {
+        "position_mm": round(float(cut_pos), 3),
+        "axis_min_mm": round(float(lo[axis_idx]), 3),
+        "axis_max_mm": round(float(hi[axis_idx]), 3),
+    }
+    return png, info
 
 
 def _numbered_source(code: str) -> str:

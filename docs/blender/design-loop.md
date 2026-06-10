@@ -76,4 +76,4 @@ The typed tools cover ~90% of design work. Use `execute_code` for:
 - Inspection that the typed tools don't expose
 - Anything where you'd otherwise call multiple typed tools in lockstep
 
-Each `execute_code` call auto-saves a `.blend` checkpoint to a temp dir before running, so a crash inside `execute_code` doesn't lose the scene.
+Each `execute_code` call auto-saves a `.blend` checkpoint to a temp dir before running, so a crash inside `execute_code` doesn't lose the scene. If an operation destroys geometry (e.g. a boolean reports `DEGENERATE RESULT`), call `blender_restore_checkpoint` IMMEDIATELY to roll back — the checkpoint is overwritten by the next mutating call, so don't run other `execute_code`/`blender_boolean` operations in between.
