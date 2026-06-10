@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-09
+
 ### Fixed
 - **`scad_cross_section` now accepts `module`/`function`/`let` definitions** —
   user code is wrapped in a top-level module (where definitions are legal)
@@ -97,7 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release. Broken MCP resources (`docs/` not included in the wheel).
   Yanked on PyPI; use 0.1.2 or later.
 
-[Unreleased]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.1.6...v0.1.7
