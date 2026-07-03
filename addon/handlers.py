@@ -484,10 +484,14 @@ def handle_cross_section(params):
     dup_radius = max((dup_max - dup_min).length / 2, 1.0)
     cam_distance = dup_radius / math.sin(math.radians(50) / 2) * 1.2
 
+    # The cutter always removes material on the +axis side of the cut plane,
+    # so the exposed cut face's normal always points +axis. Place the camera
+    # on the +axis side looking down -axis, regardless of percent.
+    # (setup_render_camera: azim 90 -> +X, azim 180 -> +Y, elev 90 -> +Z.)
     cam_angles = {
-        'X': (0, 90 if pct <= 50 else -90),
-        'Y': (0, 0 if pct <= 50 else 180),
-        'Z': (90 if pct <= 50 else -90, 0),
+        'X': (0, 90),
+        'Y': (0, 180),
+        'Z': (90, 0),
     }
     elev, azim = cam_angles[axis]
     target = Vector([
