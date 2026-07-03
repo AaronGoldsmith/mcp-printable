@@ -157,6 +157,16 @@ class TestToolSchemas:
         assert "percent" in props
         assert "object_name" in props
 
+    def test_boolean_exact_solver_params(self):
+        tools = mcp._tool_manager._tools
+        tool = tools["blender_boolean"]
+        schema = tool.parameters
+        props = schema.get("properties", {})
+        assert "use_self" in props
+        assert props["use_self"].get("default") is False, "use_self should default to False"
+        assert "use_hole_tolerant" in props
+        assert props["use_hole_tolerant"].get("default") is False, "use_hole_tolerant should default to False"
+
     def test_clearance_sweep_params(self):
         tools = mcp._tool_manager._tools
         tool = tools["blender_check_clearance_sweep"]
