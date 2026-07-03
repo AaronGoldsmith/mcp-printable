@@ -7,6 +7,8 @@ connection object directly, the same way `send()` does after receiving them.
 
 from pathlib import Path
 
+import pytest
+
 from server import BlenderConnection, format_version_mismatch, _server_version
 
 ADDON_INIT = Path(__file__).resolve().parent.parent / "addon" / "__init__.py"
@@ -83,6 +85,63 @@ class TestConnectionVersionCheck:
         conn.pop_version_warning()
         conn._check_addon_version({"addon_version": "0.0.2"})
         assert conn.addon_version == "0.0.2"
+
+
+class _FakeSock:
+    """Just enough socket surface for BlenderConnection.send()."""
+
+    def settimeout(self, timeout):
+        pass
+
+    def close(self):
+        pass
+
+
+def _stubbed_connection(response: dict) -> BlenderConnection:
+    """A BlenderConnection whose network layer returns a canned response."""
+    conn = BlenderConnection()
+    conn._connect = lambda: setattr(conn, "sock", _FakeSock())
+    conn._send_msg = lambda msg: None
+    conn._recv_msg = lambda: response
+    return conn
+
+
+class TestErrorPathWarning:
+    """A stale addon's most likely symptom is an error on the FIRST command
+    (old addon rejects a new command/param). The mismatch warning must ride
+    along on that error, not wait for a later successful call."""
+
+    def test_first_error_response_carries_mismatch_warning(self):
+        conn = _stubbed_connection({
+            "status": "error",
+            "error": "Unknown command: shiny_new_tool",
+            "addon_version": "0.0.1",
+        })
+        if _server_version() is None:
+            return  # no metadata → no mismatch to surface
+        with pytest.raises(RuntimeError) as exc_info:
+            conn.send("shiny_new_tool")
+        message = str(exc_info.value)
+        assert "Unknown command: shiny_new_tool" in message
+        assert "0.0.1" in message
+        assert "install.py" in message
+        # Consumed — the warning must not resurface on a later call.
+        assert conn.pop_version_warning() is None
+
+    def test_error_with_matching_version_raises_plain_error(self):
+        server_version = _server_version()
+        if server_version is None:
+            return  # can't construct a matching envelope without metadata
+        conn = _stubbed_connection({
+            "status": "error",
+            "error": "Object 'Cube' not found",
+            "addon_version": server_version,
+        })
+        with pytest.raises(RuntimeError) as exc_info:
+            conn.send("get_object_info")
+        message = str(exc_info.value)
+        assert "Object 'Cube' not found" in message
+        assert "install.py" not in message
 
 
 class TestAddonEnvelopeSource:

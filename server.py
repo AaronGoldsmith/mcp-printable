@@ -247,6 +247,13 @@ class BlenderConnection:
         if response.get('status') == 'error':
             error_msg = response.get('error', 'Unknown error')
             logger.error("Blender error: %s\n%s", error_msg, response.get('traceback', ''))
+            # Consume the pending mismatch warning here: a stale addon's most
+            # likely symptom is an error on the very first command (unknown
+            # command/param), and the warning would otherwise only surface on
+            # a later successful call — exactly when it no longer matters.
+            warning = self.pop_version_warning()
+            if warning:
+                raise RuntimeError(f"Blender error: {error_msg}\n\n{warning}")
             raise RuntimeError(f"Blender error: {error_msg}")
 
         return response.get('result', {})
