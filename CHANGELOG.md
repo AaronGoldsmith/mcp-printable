@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-07-03
+
+### Added
+- **`blender_boolean` exposes `use_self` / `use_hole_tolerant`** (EXACT solver
+  only) — needed for correct results when operands contain self-intersecting
+  or overlapping multi-shell geometry. New `ANNIHILATION` warning when the
+  result face count collapses by more than 75%, suggesting a `use_self=True`
+  retry. (#25, closes #20)
+- **Server/addon version mismatch warning** — the addon stamps its version
+  into every response envelope; the server warns once per session when it
+  differs and a new `blender_version_info` tool reports both versions
+  explicitly. (#26, closes #19)
+
+### Fixed
+- **`blender_cross_section` camera always faces the exposed cut plane** —
+  x/y-axis cuts (and z at `percent > 50`) previously rendered a silhouette
+  from the wrong side. (#23, closes #18)
+- **`blender_restore_checkpoint` no longer blocks subsequent checkpoint
+  saves** — the checkpoint .blend is unlinked as a library after restore, and
+  per-view-layer hide state now survives a restore. (#24, closes #17, #22)
+- **`blender_check_intersection` no longer misreports flush contact as
+  `VOLUMETRIC_OVERLAP`** on heavily coincident-face geometry — suspicious
+  exact-boolean volumes are cross-checked with a deterministic Monte Carlo
+  estimate, and contact is classified by mean penetration depth. New
+  `contact_area_mm2`, `mean_penetration_um`, and `volume_method` result
+  fields. (#27, closes #21)
+
 ## [0.2.2] — 2026-06-09
 
 ### Added
@@ -124,7 +151,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release. Broken MCP resources (`docs/` not included in the wheel).
   Yanked on PyPI; use 0.1.2 or later.
 
-[Unreleased]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/AaronGoldsmith/mcp-printable/compare/v0.1.8...v0.2.0
