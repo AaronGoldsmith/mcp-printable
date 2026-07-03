@@ -1429,29 +1429,88 @@ def handle_check_intersection(params):
     if obj_a.name == obj_b.name:
         raise ValueError("Cannot check intersection of an object with itself")
 
-    bm_a = utils.get_bmesh(obj_a)
+    bm_a = utils.get_bmesh(obj_a)  # world space (get_bmesh applies matrix_world)
     bm_b = utils.get_bmesh(obj_b)
 
     bvh_a = BVHTree.FromBMesh(bm_a)
     bvh_b = BVHTree.FromBMesh(bm_b)
 
     overlap_pairs = bvh_a.overlap(bvh_b)
+    intersects = len(overlap_pairs) > 0
+
+    aabb_min = aabb_max = None
+    if intersects:
+        # Sampling box: intersection of the two world-space AABBs (always
+        # contains the true shared volume).
+        min_a, max_a = _bmesh_aabb(bm_a)
+        min_b, max_b = _bmesh_aabb(bm_b)
+        aabb_min = Vector((max(min_a[i], min_b[i]) for i in range(3)))
+        aabb_max = Vector((min(max_a[i], max_b[i]) for i in range(3)))
 
     bm_a.free()
     bm_b.free()
-
-    intersects = len(overlap_pairs) > 0
 
     # Face-pair counts can't distinguish flush contact (coincident faces,
     # fine for assemblies) from real penetration (parts will fuse). Compute
     # the actual intersection volume on a throwaway copy to classify.
     overlap_volume = 0.0
+    contact_area = 0.0
+    volume_method = None
     if intersects:
-        overlap_volume = _intersection_volume(obj_a, obj_b)
+        overlap_volume, isect_area = _intersection_volume(obj_a, obj_b)
+        volume_method = 'exact_boolean'
+        # Contact area from the intersection mesh itself: a thin sheet (flush
+        # contact / float dust) has surface ~= 2x the contact patch, so half
+        # its surface area is the patch area. A chunky real overlap (e.g. a
+        # 1mm cube shared by two corner-overlapping cubes) also reads a small,
+        # honest area (6mm^2/2 = 3mm^2), so a localized 1mm^3 penetration
+        # yields ~333um mean penetration instead of being diluted across
+        # tens of thousands of mm^2 of whole participating faces.
+        contact_area = isect_area / 2.0
+        # The EXACT boolean solver inflates the result on heavily coincident
+        # geometry (issue #21: 76k coincident face pairs read 1805mm^3 where
+        # ground truth was 18.6mm^3), and returns 0.0 outright on failure.
+        # Cross-check with Monte Carlo point sampling (BVH ray-parity inside
+        # tests), which is immune to coincident faces.
+        if overlap_volume == 0.0:
+            # Boolean failed outright — the sampled estimate is all we have.
+            overlap_volume, _hits, _box = _sampled_overlap_volume(
+                bvh_a, bvh_b, aabb_min, aabb_max)
+            volume_method = 'sampled_fallback'
+            contact_area = 0.0  # no intersection mesh to measure
+        elif overlap_volume >= 0.01:
+            sampled, hits, box_volume = _sampled_overlap_volume(
+                bvh_a, bvh_b, aabb_min, aabb_max)
+            # Only trust the sampled estimate over the exact one when the
+            # disagreement is statistically decisive: the exact volume
+            # predicts >= 20 sample hits, yet we observed at most a quarter
+            # of that. That is the issue #21 inflation signature (expected
+            # ~141 hits, observed ~1). A thin/sparse REAL overlap whose AABB
+            # intersection dwarfs it predicts only a handful of hits, so an
+            # unlucky low sample count can never downgrade it.
+            if box_volume > 0:
+                expected_hits = overlap_volume / box_volume * _OVERLAP_SAMPLES
+                if expected_hits >= 20 and hits <= expected_hits / 4:
+                    overlap_volume = sampled
+                    volume_method = 'sampled'
+
+    # Mean penetration depth: shared volume spread over the contact area.
+    # Coincident-face float dust reads sub-micron; real overlap reads tens
+    # to hundreds of microns.
+    mean_penetration_um = None
+    if intersects and contact_area > 0:
+        mean_penetration_um = overlap_volume / contact_area * 1000.0
 
     if not intersects:
         contact = 'NONE'
     elif overlap_volume < 0.01:  # mm^3 — below this it's numerically a surface
+        contact = 'SURFACE_CONTACT'
+    elif mean_penetration_um is not None and mean_penetration_um < 5.0:
+        # Micron-scale mean penetration over the contact area: numerically a
+        # flush surface (float dust from upstream booleans), not real overlap.
+        # 5um is far below FDM resolution (~50-100um layer/extrusion) and far
+        # below any intentional interference fit, but comfortably above the
+        # sub-micron dust this guards against (issue #21: 0.46um).
         contact = 'SURFACE_CONTACT'
     else:
         contact = 'VOLUMETRIC_OVERLAP'
@@ -1460,20 +1519,29 @@ def handle_check_intersection(params):
         'intersects': intersects,
         'overlap_face_pairs': len(overlap_pairs),
         'overlap_volume_mm3': round(overlap_volume, 3),
+        'volume_method': volume_method,
+        'contact_area_mm2': round(contact_area, 2),
+        'mean_penetration_um': (round(mean_penetration_um, 3)
+                                if mean_penetration_um is not None else None),
         'contact_type': contact,
         'summary': (
             f"{obj_a.name} / {obj_b.name}: {contact}"
-            + (f" ({len(overlap_pairs)} face pairs, {overlap_volume:.3f}mm^3 shared volume)"
+            + (f" ({len(overlap_pairs)} face pairs, {overlap_volume:.3f}mm^3 shared volume"
+               f" over {contact_area:.1f}mm^2 contact"
+               + (f", mean penetration {mean_penetration_um:.2f}um"
+                  if mean_penetration_um is not None else "")
+               + ")"
                if intersects else "")
         ),
     }
 
 
 def _intersection_volume(obj_a, obj_b):
-    """Volume of the boolean intersection of two objects, in mm^3.
+    """Volume and surface area of the boolean intersection of two objects.
 
     Evaluated on a temp copy via the depsgraph — neither object is modified.
-    Returns 0.0 if the boolean fails (e.g. non-manifold inputs).
+    Returns (volume_mm3, surface_area_mm2); (0.0, 0.0) if the boolean fails
+    (e.g. non-manifold inputs).
     """
     tmp = None
     try:
@@ -1492,17 +1560,84 @@ def _intersection_volume(obj_a, obj_b):
         bm.from_mesh(mesh)
         bm.transform(tmp.matrix_world)
         volume = abs(bm.calc_volume(signed=True))
+        area = sum(f.calc_area() for f in bm.faces)
         bm.free()
         eval_obj.to_mesh_clear()
-        return volume
+        return volume, area
     except Exception:
-        return 0.0
+        return 0.0, 0.0
     finally:
         if tmp is not None:
             mesh_data = tmp.data
             bpy.data.objects.remove(tmp, do_unlink=True)
             if mesh_data.users == 0:
                 bpy.data.meshes.remove(mesh_data)
+
+
+def _bmesh_aabb(bm):
+    """Axis-aligned bounding box of a bmesh as (min Vector, max Vector)."""
+    min_co = Vector((float('inf'),) * 3)
+    max_co = Vector((float('-inf'),) * 3)
+    for v in bm.verts:
+        for i in range(3):
+            if v.co[i] < min_co[i]:
+                min_co[i] = v.co[i]
+            if v.co[i] > max_co[i]:
+                max_co[i] = v.co[i]
+    return min_co, max_co
+
+
+# Arbitrary non-axis-aligned ray direction — avoids grazing hits on the
+# axis-aligned faces typical of printable geometry.
+_INSIDE_RAY_DIR = Vector((0.2624, 0.5744, 0.7772)).normalized()
+
+
+def _point_inside_bvh(bvh, point):
+    """Ray-parity inside test: odd number of surface crossings = inside.
+
+    Robust to coincident faces between two meshes because each mesh is
+    tested independently. Assumes a watertight mesh.
+    """
+    crossings = 0
+    origin = point
+    for _ in range(256):
+        hit, _normal, _index, _dist = bvh.ray_cast(origin, _INSIDE_RAY_DIR)
+        if hit is None:
+            break
+        crossings += 1
+        origin = hit + _INSIDE_RAY_DIR * 1e-4  # advance 0.1um past the hit
+    return crossings % 2 == 1
+
+
+_OVERLAP_SAMPLES = 20000
+
+
+def _sampled_overlap_volume(bvh_a, bvh_b, box_min, box_max,
+                            samples=_OVERLAP_SAMPLES):
+    """Monte Carlo estimate of the shared volume of two meshes.
+
+    Samples points uniformly in the intersection of the two AABBs (which
+    always contains the true shared volume) and tests inside-ness against
+    each BVH independently via ray parity. Unlike the EXACT boolean solver,
+    this does not blow up on coincident faces — a flush partition with float
+    dust reads ~0 instead of hundreds of mm^3. Resolution is box_volume /
+    samples; the caller uses the raw hit count to judge statistical
+    significance before trusting the estimate over the exact boolean.
+
+    Returns (volume_mm3, hits, box_volume_mm3).
+    """
+    import random
+    dims = [box_max[i] - box_min[i] for i in range(3)]
+    if any(d <= 0 for d in dims):
+        return 0.0, 0, 0.0
+    box_volume = dims[0] * dims[1] * dims[2]
+    rng = random.Random(0)  # deterministic — repeat calls give repeat answers
+    hits = 0
+    for _ in range(samples):
+        pt = Vector((box_min[i] + rng.random() * dims[i] for i in range(3)))
+        if _point_inside_bvh(bvh_a, pt) and _point_inside_bvh(bvh_b, pt):
+            hits += 1
+    return box_volume * hits / samples, hits, box_volume
 
 
 # ---------------------------------------------------------------------------
