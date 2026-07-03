@@ -1233,9 +1233,13 @@ def handle_boolean(params):
     operation = params.get('operation', 'DIFFERENCE').upper()
     keep_cutter = params.get('keep_cutter', False)
     solver = params.get('solver', 'EXACT')
+    use_self = params.get('use_self', False)
+    use_hole_tolerant = params.get('use_hole_tolerant', False)
 
     if operation not in ('DIFFERENCE', 'UNION', 'INTERSECT'):
         raise ValueError(f"Invalid operation '{operation}'. Use DIFFERENCE, UNION, or INTERSECT.")
+    if (use_self or use_hole_tolerant) and solver != 'EXACT':
+        raise ValueError("use_self and use_hole_tolerant are only valid with the EXACT solver.")
 
     target = utils.resolve_object(target_name)
     cutter = utils.resolve_object(cutter_name)
@@ -1268,6 +1272,9 @@ def handle_boolean(params):
     mod.operation = operation
     mod.object = cutter
     mod.solver = solver
+    if solver == 'EXACT':
+        mod.use_self = use_self
+        mod.use_hole_tolerant = use_hole_tolerant
     bpy.ops.object.modifier_apply(modifier="_agent_bool")
 
     if not keep_cutter:
@@ -1313,6 +1320,17 @@ def handle_boolean(params):
             f"DEGENERATE RESULT: {operation} produced 0 faces — the mesh was destroyed. "
             "For INTERSECT this means the objects did not overlap. "
             "A checkpoint was auto-saved before the operation."
+        )
+    elif face_count_after < face_count_before * 0.25:
+        hint = (
+            "Retry with use_self=True." if not use_self
+            else "use_self was already True — inspect the operands."
+        )
+        warnings.append(
+            f"ANNIHILATION: face count collapsed {face_count_before}→{face_count_after} "
+            f"(>75% loss) — with the EXACT solver this usually means an operand contains "
+            f"self-intersecting shells that were misclassified. {hint} "
+            f"A checkpoint was auto-saved before the operation."
         )
     if components > 1:
         warnings.append(f"DISCONNECTED: {components} islands — boolean union on coplanar faces. Increase overlap.")

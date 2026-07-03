@@ -438,10 +438,18 @@ async def blender_boolean(
     operation: str = "DIFFERENCE",
     keep_cutter: bool = False,
     solver: str = "EXACT",
+    use_self: bool = False,
+    use_hole_tolerant: bool = False,
 ) -> str:
     """Boolean op on two meshes with built-in connectivity + manifold checks. Always prefer this over raw modifiers in execute_code.
 
     operation: DIFFERENCE | UNION | INTERSECT. solver: EXACT (reliable) | FAST.
+    use_self (EXACT only): classify self-intersecting operands via winding numbers.
+    Set True when an operand contains multiple overlapping shells (multi-shell
+    meshes) — without it the EXACT solver can silently annihilate the target
+    (an ANNIHILATION warning in the result flags this). Slower; default False.
+    use_hole_tolerant (EXACT only): better results when operands have holes
+    (non-watertight geometry). Slower; default False.
     Returns face counts, connected components, warnings. A WARNING means the
     boolean may have silently failed — inspect the numbers and re-run.
     """
@@ -451,6 +459,8 @@ async def blender_boolean(
         "operation": operation,
         "keep_cutter": keep_cutter,
         "solver": solver,
+        "use_self": use_self,
+        "use_hole_tolerant": use_hole_tolerant,
     })
     return json.dumps(result, indent=2)
 
