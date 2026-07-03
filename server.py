@@ -730,8 +730,9 @@ async def blender_check_intersection(object_a: str, object_b: str) -> str:
     Distinct from clearance (which measures distance between non-touching objects).
     Returns contact_type: NONE | SURFACE_CONTACT (coincident faces, expected for
     flush-fit assemblies) | VOLUMETRIC_OVERLAP (parts share volume and will fuse),
-    plus overlap_volume_mm3, contact_area_mm2, mean_penetration_um (overlap volume
-    spread over the contact area — micron-scale means flush contact / float dust,
+    plus overlap_volume_mm3, contact_area_mm2 (half the intersection mesh's surface
+    area — the contact patch), mean_penetration_um (overlap volume spread over
+    the contact area — micron-scale means flush contact / float dust,
     tens of microns or more means real penetration; use it to judge borderline
     cases yourself), and the raw face-pair count.
     """
