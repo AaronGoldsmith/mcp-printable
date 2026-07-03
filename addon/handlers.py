@@ -156,6 +156,33 @@ def handle_clear_scene(params):
     return {'cleared': True, 'units': 'MILLIMETERS', 'scale_length': 0.001}
 
 
+def _unlink_checkpoint_library(path):
+    """Drop any bpy.data.libraries entry pointing at the checkpoint file.
+
+    Even with ``link=False`` (append), Blender can leave the source .blend
+    registered in ``bpy.data.libraries``. The next auto_save_checkpoint then
+    fails with "Cannot overwrite used library" because Blender refuses to
+    overwrite a .blend that is in use as a library (#17, #22). Scoped to
+    libraries whose filepath matches the checkpoint path so any libraries
+    the user linked intentionally are left alone.
+    """
+    target = os.path.normcase(os.path.normpath(path))
+    stale = [
+        lib for lib in bpy.data.libraries
+        if os.path.normcase(os.path.normpath(bpy.path.abspath(lib.filepath))) == target
+    ]
+    if not stale:
+        return
+    stale_set = set(stale)
+    for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.materials,
+                 bpy.data.lights, bpy.data.cameras, bpy.data.curves):
+        for db in coll:
+            if db.library in stale_set:
+                db.make_local()
+    for lib in stale:
+        bpy.data.libraries.remove(lib)
+
+
 def handle_restore_checkpoint(params):
     """Replace the current scene objects with those from the auto-saved checkpoint.
 
@@ -186,6 +213,23 @@ def handle_restore_checkpoint(params):
         if obj is not None:
             bpy.context.scene.collection.objects.link(obj)
             restored.append(obj.name)
+
+    # Re-apply per-view-layer hide state stamped by auto_save_checkpoint (#22).
+    # hide_set() state lives in the view layer, not the object, so it does not
+    # survive appending — without this, hidden objects come back visible.
+    for obj in data_to.objects:
+        if obj is None:
+            continue
+        hidden = obj.get('_printable_hidden')
+        if hidden is not None:
+            try:
+                obj.hide_set(bool(hidden))
+            except RuntimeError:
+                pass  # object not in the active view layer
+            del obj['_printable_hidden']
+
+    # Unlink the checkpoint .blend so the next auto-save can overwrite it (#17, #22).
+    _unlink_checkpoint_library(path)
 
     _ensure_mm_units()
     _ensure_scene_lighting()

@@ -266,5 +266,15 @@ def checkpoint_path():
 def auto_save_checkpoint():
     """Save a .blend checkpoint if the file has been saved before, or to temp."""
     path = checkpoint_path()
+    # Stamp per-view-layer hide state into a custom property so restore can
+    # re-apply it (#22). hide_set() state lives in the view layer and is not
+    # carried when the checkpoint's objects are appended back.
+    for obj in bpy.context.scene.objects:
+        if obj.library is not None:
+            continue  # linked library data is read-only; can't stamp it
+        try:
+            obj['_printable_hidden'] = obj.hide_get()
+        except Exception:
+            pass  # e.g. not in the active view layer, or read-only ID data
     bpy.ops.wm.save_as_mainfile(filepath=path, copy=True)
     return path
