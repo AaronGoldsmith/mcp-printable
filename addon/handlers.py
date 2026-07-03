@@ -1321,7 +1321,10 @@ def handle_boolean(params):
             "For INTERSECT this means the objects did not overlap. "
             "A checkpoint was auto-saved before the operation."
         )
-    elif face_count_after < face_count_before * 0.25:
+    elif operation != 'INTERSECT' and face_count_after < face_count_before * 0.25:
+        # INTERSECT is excluded: keeping only a small sliver of the target
+        # (e.g. clipping a high-poly mesh with a small cutter) is usually
+        # intentional, so a large face-count drop is not evidence of failure.
         hint = (
             "Retry with use_self=True." if not use_self
             else "use_self was already True — inspect the operands."
