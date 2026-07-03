@@ -14,6 +14,7 @@ Plus domain-knowledge documents as MCP resources (printable://... URIs).
 Cross-backend handoff happens via STL — both backends import and export it.
 """
 
+import importlib.metadata
 import json
 import socket
 import struct
@@ -93,6 +94,49 @@ mcp = FastMCP(
 
 
 # ---------------------------------------------------------------------------
+# Addon/server version check
+#
+# The MCP server auto-updates from PyPI (`uvx --refresh`), but the Blender
+# addon is a *copy* installed into Blender's addons dir and only updates via
+# `python install.py` + Blender restart. A stale addon silently lacks fixes
+# the server assumes are present (issue #19), so the addon reports its
+# bl_info version in every response envelope and we compare on first contact.
+# ---------------------------------------------------------------------------
+
+def _server_version() -> str | None:
+    """Version of the installed mcp-printable package, or None if unknown."""
+    try:
+        return importlib.metadata.version("mcp-printable")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def format_version_mismatch(addon_version: str | None,
+                            server_version: str | None) -> str | None:
+    """Return a warning string if the addon and server versions differ.
+
+    addon_version is None for addons that predate version reporting — treated
+    as old/unknown and still warned about. server_version is None when package
+    metadata is unavailable (e.g. odd dev setups); no comparison is possible,
+    so no warning. Never raises.
+    """
+    if server_version is None:
+        return None
+    if addon_version is None:
+        return (
+            f"warning: installed Blender addon predates version reporting "
+            f"(older than server {server_version}) — run 'python install.py' "
+            f"and restart Blender to update it"
+        )
+    if addon_version != server_version:
+        return (
+            f"warning: addon {addon_version} != server {server_version} — "
+            f"run 'python install.py' and restart Blender to update the addon"
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # TCP client to Blender addon
 # ---------------------------------------------------------------------------
 
@@ -103,6 +147,28 @@ class BlenderConnection:
         self.host = host
         self.port = port
         self.sock: socket.socket | None = None
+        # Addon version as reported in response envelopes (None until first
+        # contact, and stays None for pre-0.2.3 addons that don't report it).
+        self.addon_version: str | None = None
+        self._version_checked = False
+        self._pending_version_warning: str | None = None
+
+    def _check_addon_version(self, response: dict) -> None:
+        """Record the addon version from a response envelope; warn once on mismatch."""
+        self.addon_version = response.get('addon_version')
+        if self._version_checked:
+            return
+        self._version_checked = True
+        warning = format_version_mismatch(self.addon_version, _server_version())
+        if warning:
+            logger.warning(warning)
+            self._pending_version_warning = warning
+
+    def pop_version_warning(self) -> str | None:
+        """Return the pending mismatch warning (once), so a tool can surface it."""
+        warning = self._pending_version_warning
+        self._pending_version_warning = None
+        return warning
 
     def _connect(self) -> None:
         if self.sock is not None:
@@ -176,6 +242,8 @@ class BlenderConnection:
                     pass
                 self.sock = None
 
+        self._check_addon_version(response)
+
         if response.get('status') == 'error':
             error_msg = response.get('error', 'Unknown error')
             logger.error("Blender error: %s\n%s", error_msg, response.get('traceback', ''))
@@ -185,6 +253,16 @@ class BlenderConnection:
 
 
 blender = BlenderConnection()
+
+
+def _with_version_warning(text: str) -> str:
+    """Prepend the one-shot addon-version-mismatch warning to a tool result.
+
+    The warning is pending only after the first Blender contact of this server
+    process (and only on mismatch), so exactly one tool result carries it.
+    """
+    warning = blender.pop_version_warning()
+    return f"{warning}\n\n{text}" if warning else text
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +359,12 @@ def _text_and_image(text: str, image_b64: str):
     ]
 
 
+def _image_result(b64: str):
+    """Image-only tool result — carries the version warning as text if pending."""
+    warning = blender.pop_version_warning()
+    return _text_and_image(warning, b64) if warning else _image_content(b64)
+
+
 # ---------------------------------------------------------------------------
 # MCP resources — domain-knowledge docs exposed as printable://... URIs
 #
@@ -350,7 +434,7 @@ def _res_openscad_backend() -> str:
 async def blender_get_scene_info() -> str:
     """Get a summary of all objects in the Blender scene: names, types, dimensions, vertex counts."""
     result = blender.send("get_scene_info")
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 @mcp.tool(
@@ -361,7 +445,7 @@ async def blender_get_scene_info() -> str:
 async def blender_get_object_info(name: str) -> str:
     """Get detailed info about a specific object: dimensions, mesh stats, modifiers, materials, manifold check."""
     result = blender.send("get_object_info", {"name": name})
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 @mcp.tool(
@@ -391,7 +475,7 @@ async def blender_clear_scene(force: bool = False) -> str:
                 f"existing geometry and iterate on it instead."
             )
     blender.send("clear_scene")
-    return "Scene cleared."
+    return _with_version_warning("Scene cleared.")
 
 
 @mcp.tool(
@@ -409,7 +493,7 @@ async def blender_restore_checkpoint() -> str:
     a subsequent mutating call overwrites the checkpoint with the broken state.
     """
     result = blender.send("restore_checkpoint")
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 @mcp.tool(
@@ -420,7 +504,7 @@ async def blender_restore_checkpoint() -> str:
 async def blender_rename_object(old_name: str, new_name: str) -> str:
     """Rename an object (e.g., 'Cylinder.001' -> 'hinge_barrel')."""
     result = blender.send("rename_object", {"old_name": old_name, "new_name": new_name})
-    return f"Renamed '{result['old_name']}' -> '{result['new_name']}'"
+    return _with_version_warning(f"Renamed '{result['old_name']}' -> '{result['new_name']}'")
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +536,7 @@ async def blender_boolean(
         "keep_cutter": keep_cutter,
         "solver": solver,
     })
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +563,7 @@ async def blender_execute_code(code: str) -> str:
         parts.append(f"STDERR:\n{result['stderr']}")
     if result.get('result'):
         parts.append(f"Result: {result['result']}")
-    return '\n'.join(parts) if parts else "Code executed successfully (no output)."
+    return _with_version_warning('\n'.join(parts) if parts else "Code executed successfully (no output).")
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +597,7 @@ async def blender_get_screenshot(
         params["focus_object"] = focus_object
         params["isolate"] = isolate
     result = blender.send("get_screenshot", params)
-    return _image_content(result['image'])
+    return _image_result(result['image'])
 
 
 @mcp.tool(
@@ -541,7 +625,7 @@ async def blender_render_tiled(
         params["isolate"] = isolate
     result = blender.send("render_tiled", params)
     composite = _tile_images(result['renders'], columns=min(len(angles), 4))
-    return _image_content(composite)
+    return _image_result(composite)
 
 
 @mcp.tool(
@@ -567,7 +651,7 @@ async def blender_render_turntable(
     cols = min(steps, 4)
     composite = _tile_images(result['renders'], columns=cols, tile_w=300, tile_h=300)
     text = f"Turntable: {object_name}, {steps} angles at {elevation}° elevation"
-    return _text_and_image(text, composite)
+    return _text_and_image(_with_version_warning(text), composite)
 
 
 @mcp.tool(
@@ -600,7 +684,7 @@ async def blender_cross_section(
     result = blender.send("cross_section", payload)
     suffix = f" ({result.get('object_count', 1)} objects)" if result.get('object_count', 1) > 1 else ""
     text = f"Cross-section: {axis.upper()} axis at {percent}% (position: {result['cut_position_mm']}mm){suffix}"
-    return _text_and_image(text, result['image'])
+    return _text_and_image(_with_version_warning(text), result['image'])
 
 
 @mcp.tool(
@@ -639,7 +723,7 @@ async def blender_cross_section_gallery(
     cols = len(percents)
     composite = _tile_images(result['renders'], columns=cols, tile_w=300, tile_h=300)
     text = f"Cross-section gallery: {len(result['renders'])} slices across axes {axes}"
-    return _text_and_image(text, composite)
+    return _text_and_image(_with_version_warning(text), composite)
 
 
 @mcp.tool(
@@ -663,7 +747,7 @@ async def blender_render_printability_heatmap(
         "min_wall_mm": min_wall_mm,
     })
     composite = _tile_images(result['renders'], columns=min(len(result['renders']), 4))
-    return _text_and_image(result['summary'], composite)
+    return _text_and_image(_with_version_warning(result['summary']), composite)
 
 
 @mcp.tool(
@@ -688,7 +772,7 @@ async def blender_render_with_dimensions(
         d = m['dimensions_mm']
         lines.append(f"  {m['name']}: {d[0]}mm x {d[1]}mm x {d[2]}mm")
 
-    return _text_and_image('\n'.join(lines), result['image'])
+    return _text_and_image(_with_version_warning('\n'.join(lines)), result['image'])
 
 
 @mcp.tool(
@@ -711,7 +795,7 @@ async def blender_render_before_after(code: str) -> Any:
     if code_out.get('stderr'):
         parts.append(f"STDERR: {code_out['stderr']}")
 
-    return _text_and_image('\n'.join(parts), composite)
+    return _text_and_image(_with_version_warning('\n'.join(parts)), composite)
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +819,7 @@ async def blender_check_intersection(object_a: str, object_b: str) -> str:
     result = blender.send("check_intersection", {
         "object_a": object_a, "object_b": object_b,
     })
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 @mcp.tool(
@@ -759,7 +843,7 @@ async def blender_check_retention(
         "direction": direction,
         "displacement": displacement,
     })
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +863,7 @@ async def blender_check_clearance(
         "object_a": object_a, "object_b": object_b,
         "min_clearance_mm": min_clearance_mm,
     })
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 @mcp.tool(
@@ -802,7 +886,7 @@ async def blender_check_clearance_sweep(
         "inner_object": inner_object, "outer_object": outer_object,
         "axis": axis, "steps": steps, "min_clearance_mm": min_clearance_mm,
     })
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 @mcp.tool(
@@ -837,7 +921,7 @@ async def blender_validate(
     if clearance_partners:
         params["clearance_partners"] = clearance_partners
     result = blender.send("validate", params)
-    return json.dumps(result, indent=2)
+    return _with_version_warning(json.dumps(result, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -879,7 +963,7 @@ async def blender_export_stl(
     parts.append(f"  Objects: {', '.join(exported)}")
     for w in result.get('warnings', []):
         parts.append(w)
-    return '\n'.join(parts)
+    return _with_version_warning('\n'.join(parts))
 
 
 @mcp.tool(
@@ -894,7 +978,7 @@ async def blender_import_stl(path: str) -> str:
     """
     path = os.path.abspath(path)
     result = blender.send("import_stl", {"path": path})
-    return (
+    return _with_version_warning(
         f"Imported '{result['object_name']}' from {result['path']}: "
         f"{result['vertices']} vertices, {result['faces']} faces"
     )
@@ -915,7 +999,36 @@ async def blender_save_blend(path: str | None = None) -> str:
     if path:
         params["path"] = os.path.abspath(path)
     result = blender.send("save_blend", params)
-    return f"Saved: {result['path']}"
+    return _with_version_warning(f"Saved: {result['path']}")
+
+
+@mcp.tool(
+    name="blender_version_info",
+    annotations={"readOnlyHint": True, "destructiveHint": False,
+                 "idempotentHint": True, "openWorldHint": False},
+)
+async def blender_version_info() -> str:
+    """Report the MCP server version vs. the installed Blender addon version.
+
+    The server auto-updates from PyPI, but the addon is a copy inside Blender's
+    addons dir that only updates via 'python install.py' + Blender restart —
+    use this to diagnose stale-addon behavior. Addons older than 0.2.3 don't
+    report a version and show as unknown.
+    """
+    server_version = _server_version()
+    # Any command works as a probe — the addon reports its version in every
+    # response envelope. get_scene_info is the cheapest read-only one.
+    blender.send("get_scene_info")
+    info = {
+        "server_version": server_version or "unknown (package metadata not found)",
+        "addon_version": blender.addon_version or "unknown (addon predates version reporting)",
+        "match": blender.addon_version is not None
+                 and blender.addon_version == server_version,
+    }
+    warning = format_version_mismatch(blender.addon_version, server_version)
+    if warning:
+        info["warning"] = warning
+    return json.dumps(info, indent=2)
 
 
 # ---------------------------------------------------------------------------

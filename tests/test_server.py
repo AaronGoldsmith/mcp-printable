@@ -21,7 +21,7 @@ class TestToolRegistration:
         """All tools should be registered (Blender + OpenSCAD backends)."""
         names = self._get_tool_names()
         expected = sorted([
-            # Blender backend (23)
+            # Blender backend (24)
             "blender_get_scene_info",
             "blender_get_object_info",
             "blender_clear_scene",
@@ -45,6 +45,7 @@ class TestToolRegistration:
             "blender_export_stl",
             "blender_import_stl",
             "blender_save_blend",
+            "blender_version_info",
             # OpenSCAD backend (5)
             "scad_compile",
             "scad_render_views",
@@ -85,6 +86,7 @@ class TestToolRegistration:
             "blender_check_clearance",
             "blender_check_clearance_sweep",
             "blender_validate",
+            "blender_version_info",
         ]
         tools = mcp._tool_manager._tools
         for name in read_only_tools:

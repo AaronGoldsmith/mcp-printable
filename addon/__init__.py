@@ -10,6 +10,11 @@ bl_info = {
     "category": "Development",
 }
 
+# Dotted version string included in every response envelope so the MCP server
+# can detect a stale installed addon (the server tracks PyPI; the addon is a
+# copy in Blender's addons dir that only updates via install.py + restart).
+_ADDON_VERSION = ".".join(str(n) for n in bl_info["version"])
+
 import bpy
 import json
 import socket
@@ -91,6 +96,7 @@ def _process_commands():
                 'id': req.id,
                 'status': 'success',
                 'result': result,
+                'addon_version': _ADDON_VERSION,
             }
         except Exception as e:
             req.result = {
@@ -98,6 +104,7 @@ def _process_commands():
                 'status': 'error',
                 'error': str(e),
                 'traceback': traceback.format_exc(),
+                'addon_version': _ADDON_VERSION,
             }
         req.event.set()
 
@@ -127,6 +134,7 @@ def _handle_client(conn, addr):
                     'id': req.id,
                     'status': 'error',
                     'error': 'Command timed out after 120 seconds',
+                    'addon_version': _ADDON_VERSION,
                 }
 
             try:
