@@ -449,9 +449,18 @@ async def blender_get_scene_info() -> str:
     annotations={"readOnlyHint": True, "destructiveHint": False,
                  "idempotentHint": True, "openWorldHint": False},
 )
-async def blender_get_object_info(name: str) -> str:
-    """Get detailed info about a specific object: dimensions, mesh stats, modifiers, materials, manifold check."""
-    result = blender.send("get_object_info", {"name": name})
+async def blender_get_object_info(object_name: str | None = None, name: str | None = None) -> str:
+    """Get detailed info about a specific object: dimensions, mesh stats, modifiers, materials, manifold check.
+
+    object_name: the object to inspect. (`name` is a deprecated alias kept so
+    older callers keep working; every other single-object tool uses `object_name`.)
+    """
+    if object_name and name and object_name != name:
+        raise ValueError("Provide either object_name or name (deprecated alias), not both")
+    resolved = object_name or name
+    if not resolved:
+        raise ValueError("object_name is required")
+    result = blender.send("get_object_info", {"name": resolved})
     return _with_version_warning(json.dumps(result, indent=2))
 
 
