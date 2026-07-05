@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`blender_get_object_info` accepts `object_name`** to match every other
+  single-object tool; `name` still works as a deprecated alias. Repeated
+  schema-validation errors from agents guessing `object_name` motivated this.
+
 ### Fixed
 - **Checkpoint save hardened against "Cannot overwrite used library"** —
   `auto_save_checkpoint` now drops any stale `bpy.data.libraries` entry
