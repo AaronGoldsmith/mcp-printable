@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Checkpoint save hardened against "Cannot overwrite used library"** —
+  `auto_save_checkpoint` now drops any stale `bpy.data.libraries` entry
+  pointing at the checkpoint path before saving (covers the case where a
+  restore failed mid-way and never unlinked), and writes to a unique temp
+  file swapped in via atomic `os.replace` so the checkpoint on disk is never
+  half-written and no `.blend1` clutter accumulates. (#17, #22)
+
 ## [0.2.3] — 2026-07-03
 
 ### Added
